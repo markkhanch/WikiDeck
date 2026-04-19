@@ -1,0 +1,16 @@
+# OS / editor
+.DS_Store
+.vscode/
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Local runtime data (do not publish)
+data/wikideck.db
+ui/assets/card_images/
+
+# Local env files
+.env
+.env.*

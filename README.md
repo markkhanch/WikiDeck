@@ -16,6 +16,13 @@ that are actually connected on Wikipedia.
 
 Active development. Everything is subject to change.
 
+## Setup
+
+1. Install dependencies:
+   `pip3 install -r requirements.txt`
+2. (Optional) Set custom Ollama endpoint:
+   `export WIKIDECK_OLLAMA_HOST=http://127.0.0.1:11434`
+
 ## Tech Stack
 
 - Python + Pygame — game engine and UI
@@ -33,6 +40,12 @@ This project uses **Pygame** for the game client and **Ollama**
 Ollama is used to generate card abilities from Wikipedia article summaries. 
 Claude was used throughout design and planning as a thinking partner for 
 game design decisions.
+
+## Security Notes (before publishing)
+
+- Do not commit local runtime data: `data/wikideck.db`, `ui/assets/card_images/`, `.env*`.
+- Do not commit local tooling settings: `.claude/`, `.vscode/`, `__pycache__/`, `.DS_Store`.
+- Multiplayer server is WebSocket MVP with no authentication/encryption layer; run only on trusted LAN unless you add auth/TLS.
 
 ## Author
 

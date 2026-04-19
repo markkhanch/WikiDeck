@@ -66,6 +66,7 @@ RARITY_BUDGETS = {
 
 HP_CAPS = {"COMMON": 4, "UNCOMMON": 5, "RARE": 6, "EPIC": 7, "LEGENDARY": 8}
 BASE_SCORE_CAPS = {"COMMON": 4, "UNCOMMON": 5, "RARE": 6, "EPIC": 7, "LEGENDARY": 8}
+MIN_STAT_FLOORS = {"COMMON": 2, "UNCOMMON": 2, "RARE": 3, "EPIC": 3, "LEGENDARY": 4}
 
 ABILITY_COSTS = {
     "DAMAGE": 1.4,
@@ -909,6 +910,7 @@ def _generate_flavor(spec: dict, summary: str, retries: int = 4) -> dict:
 def _balance_card(spec: dict) -> dict:
     rarity = spec["rarity"]
     budget = RARITY_BUDGETS.get(rarity, 2.0)
+    floor = MIN_STAT_FLOORS.get(rarity, 1)
 
     effect_type = spec["effect_type"]
     value = int(spec.get("ability_value", 0) or 0)
@@ -920,8 +922,8 @@ def _balance_card(spec: dict) -> dict:
     elif trigger == "PASSIVE":
         cost += 0.3
 
-    hp = max(1, min(HP_CAPS.get(rarity, 5), round(1.2 + budget - 0.6 * cost)))
-    base_score = max(1, min(BASE_SCORE_CAPS.get(rarity, 5), round(1.0 + budget - 0.4 * cost + 0.12 * value)))
+    hp = max(floor, min(HP_CAPS.get(rarity, 5), round(1.2 + budget - 0.6 * cost)))
+    base_score = max(floor, min(BASE_SCORE_CAPS.get(rarity, 5), round(1.0 + budget - 0.4 * cost + 0.12 * value)))
     spec["hp"] = int(hp)
     spec["base_score"] = int(base_score)
     return spec
@@ -974,6 +976,10 @@ def generate_card_spec(
     if not runtime_available:
         fallback = get_fallback_cached_card(title, rarity)
         if fallback is not None and fallback.get("theme") == "LIVING":
+            fallback = dict(fallback)
+            fallback["rarity"] = rarity
+            fallback["title"] = str(fallback.get("title", title) or title)
+            fallback = _balance_card(fallback)
             print(
                 f"[gen] db fallback: requested {title} [{rarity}] -> "
                 f"{fallback['title']} [{fallback['rarity']}]",

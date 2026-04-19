@@ -132,7 +132,8 @@ def _generate_pack_cards(pack_type: str, on_progress=None, pack_size: int | None
 
     pack_size = int(pack_size or PACK_TYPES[pack_type]["size"])
     cards: list[dict] = []
-    seen: set[tuple[str, str]] = set()
+    used_source_titles: set[str] = set()
+    used_card_titles: set[str] = set()
     attempts = 0
     max_attempts = pack_size * 20
     diversity = {"effects": {}, "triggers": {}, "target": pack_size}
@@ -144,13 +145,17 @@ def _generate_pack_cards(pack_type: str, on_progress=None, pack_size: int | None
 
         rarity = pick_rarity_weighted(pack_type)
         title, summary, _ignored_rarity = get_article_from_pool(diversity=diversity, pack_rarity=rarity)
-        key = (title, rarity)
-        if key in seen:
+        if title in used_source_titles:
             continue
+        used_source_titles.add(title)
 
         spec = generate_card_spec(title, summary, rarity, diversity=diversity)
+        final_title = str(spec.get("title", title) or title)
+        if final_title in used_card_titles:
+            continue
+
         cards.append(spec)
-        seen.add(key)
+        used_card_titles.add(final_title)
         apply_diversity(diversity, spec)
 
         if on_progress is not None:

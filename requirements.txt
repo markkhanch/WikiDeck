@@ -1,4 +1,4 @@
-pygame>=2.5
+pygame-ce>=2.5
 requests>=2.31
 ollama>=0.1
 pillow>=10.4

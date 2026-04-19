@@ -10,11 +10,11 @@ screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
 pygame.display.set_caption("WikiDeck")
 
 # Background image
-bg_image = pygame.image.load(os.path.join("assets/images/bg_main.png")).convert()
+bg_image = pygame.image.load(os.path.join("assets", "images", "bg_main.png")).convert()
 bg_image = pygame.transform.scale(bg_image, (WINDOW_WIDTH, WINDOW_HEIGHT))
 
 # Card image
-card_image = pygame.image.load(os.path.join("assets/images/card.png")).convert()
+card_image = pygame.image.load(os.path.join("assets", "images", "card.png")).convert()
 card_image = pygame.transform.scale(card_image, (100, 140))
 card_rect = card_image.get_frect(center = (WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2))
 

@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import random
+import sys
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any
 
 import websockets
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 from config import STARTING_HAND_SIZE
 from core.card import Card

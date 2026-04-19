@@ -31,7 +31,7 @@ from data.card_contract import (
     sanitize_ability_text_value,
     validate_card_contract,
 )
-from data.db import get_cached_card, init_db, save_card
+from data.db import get_cached_card, get_fallback_cached_card, init_db, save_card
 from data.historical_people_pool import HISTORICAL_PERSONALITIES
 from data.wikipedia import get_article
 
@@ -966,6 +966,20 @@ def generate_card_spec(
     if cached is not None and cached.get("theme") == "LIVING":
         print(f"[gen] cache hit: {title} [{rarity}]", flush=True)
         return cached
+
+    runtime_available = False
+    if ollama is not None:
+        with _OLLAMA_CHAT_LOCK:
+            runtime_available = _ensure_ollama_runtime()
+    if not runtime_available:
+        fallback = get_fallback_cached_card(title, rarity)
+        if fallback is not None and fallback.get("theme") == "LIVING":
+            print(
+                f"[gen] db fallback: requested {title} [{rarity}] -> "
+                f"{fallback['title']} [{fallback['rarity']}]",
+                flush=True,
+            )
+            return fallback
 
     print(f"[gen] generating: {title} [{rarity}]", flush=True)
     avoid_effects: set[str] = set()

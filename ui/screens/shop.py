@@ -13,6 +13,7 @@ from config import (
     MUTED_TEXT,
     NEON_BLUE,
     NEON_GREEN,
+    NEON_RED,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
     WHITE_TEXT,
@@ -21,14 +22,15 @@ from core.card import Card
 from core.card_factory import build_card_from_spec
 from data.booster import (
     PACK_DISPLAY_NAMES,
-    PACK_TYPES,
     buy_single_card,
     ensure_shop_singles,
+    get_pack_types,
     get_pending_packs,
     get_shop_singles,
     open_pack,
     purchase_pack,
 )
+from data.settings_service import get_bool, target_fps
 from ui.components.hover_panel import draw_hover_panel
 from ui.screens.common import (
     close_button_rect,
@@ -148,12 +150,13 @@ def run_shop(
     refresh_data(force=True)
 
     while True:
-        clock.tick(60)
+        clock.tick(target_fps())
         refresh_data()
         mx, my = pygame.mouse.get_pos()
         now = time.time()
 
-        if reveal_queue and now - reveal_last_step >= 0.18:
+        reveal_step_delay = 0.18 if get_bool("display.animations") else 0.0
+        if reveal_queue and now - reveal_last_step >= reveal_step_delay:
             reveal_last_step = now
             reveal_cards.append(build_card_from_spec(reveal_queue.pop(0)))
 
@@ -258,6 +261,7 @@ def run_shop(
         hovered_card: Card | None = None
 
         if active_tab == "boosters":
+            pack_types = get_pack_types()
             card_w = (content_rect.width - 50) // 4
             card_h = content_rect.height - 40
             per_type_latest: dict[str, dict] = {}
@@ -291,7 +295,7 @@ def run_shop(
                     screen.blit(fallback, fallback.get_rect(center=art_rect.center))
 
                 title = fonts["small"].render(PACK_DISPLAY_NAMES[pack_type], True, WHITE_TEXT)
-                price = fonts["small"].render(f"{PACK_TYPES[pack_type]['price']} gold", True, GOLD)
+                price = fonts["small"].render(f"{pack_types[pack_type]['price']} gold", True, GOLD)
                 screen.blit(title, (rect.x + 10, rect.y + 188))
                 screen.blit(price, (rect.x + 10, rect.y + 208))
 
@@ -326,11 +330,19 @@ def run_shop(
                     line = "No active packs"
                 elif latest["status"] == "generating":
                     line = f"Generating... {latest['generated_count']}/{latest['pack_size']} cards"
+                elif latest["status"] == "error":
+                    line = "Generation failed. Buy again."
                 elif latest["can_open"]:
                     line = "Open Pack -> My Packs"
                 else:
                     line = "Queued..."
-                status_surf = fonts["small"].render(line, True, GOLD if "Open Pack" in line else MUTED_TEXT)
+                if "Open Pack" in line:
+                    status_color = GOLD
+                elif latest is not None and latest["status"] == "error":
+                    status_color = NEON_RED
+                else:
+                    status_color = MUTED_TEXT
+                status_surf = fonts["small"].render(line, True, status_color)
                 screen.blit(status_surf, (rect.x + 10, status_y))
 
         elif active_tab == "singles":
@@ -403,6 +415,9 @@ def run_shop(
                     if pack["status"] == "generating":
                         state_text = f"Generating... {pack['generated_count']}/{pack['pack_size']} cards"
                         color = MUTED_TEXT
+                    elif pack["status"] == "error":
+                        state_text = "Generation failed."
+                        color = NEON_RED
                     elif pack["can_open"]:
                         state_text = "Open Pack ->"
                         color = NEON_GREEN

@@ -55,8 +55,9 @@ def _wrap(text: str, font: pygame.font.Font, max_w: int) -> List[str]:
 
 
 TERM_GLOSSARY = {
-    "ON PLAY": "ON PLAY triggers activate immediately when the card is played.",
-    "ON DEATH": "ON DEATH triggers activate when the card is defeated.",
+    "DEPLOY": "DEPLOY triggers activate immediately when the card is played.",
+    "DEATHWISH": "DEATHWISH triggers activate when this card is defeated.",
+    "ORDER": "ORDER can be activated manually once per turn.",
     "ABILITY": "Ability is the special card action text linked to trigger and effect.",
     "HP": "In card games, HP is a card's health. When it reaches 0, the card is defeated.",
     "SCORE": "Score (SC) is the card's points contribution while on the field.",
@@ -69,26 +70,29 @@ TERM_GLOSSARY = {
     "DRAW": "Draw means taking cards from your deck into your hand.",
     "DISCARD": "Discard moves cards from your hand to your discard pile.",
     "GOLD": "Gold is a resource used for purchases or effects.",
-    "EXECUTE": "Execute destroys an enemy card if it meets a condition.",
+    "DESTROY": "Destroy removes an enemy card from the battlefield.",
+    "BANISH": "Banish removes a card from the game without sending it to discard.",
+    "BOOST": "Boost increases a card's base score.",
+    "DRAIN": "Drain lowers enemy score and transfers that amount to the source card.",
     "REVIVE": "Revive returns a defeated card to the field.",
-    "BRIBE": "Bribe temporarily converts or controls an enemy card.",
-    "MOVE": "Move repositions a card between zones.",
-    "SUMMON": "Summon creates a new allied card on the field.",
-    "PLAGUE": "PLAGUE is a negative status that deals damage over time.",
-    "VIGOR": "VIGOR is a positive status that boosts performance for a time.",
-    "DECAY": "DECAY is a negative status that weakens a card over time.",
-    "FLOURISH": "FLOURISH is a positive status that improves Score or rewards.",
+    "BLEEDING": "BLEEDING deals 1 damage at end of turn and loses one stack.",
+    "VITALITY": "VITALITY heals 1 HP at end of turn and loses one stack.",
+    "POISON": "At 2 stacks, POISON destroys the unit.",
     "SHIELD": "SHIELD is a protective status that blocks or reduces damage.",
     "IMMUNITY": "IMMUNITY prevents negative effects for a short time.",
+    "LOCK": "LOCK disables a card's ability.",
+    "VEIL": "VEIL prevents targeting by abilities.",
+    "CLASH": "CLASH makes both cards damage each other simultaneously.",
+    "DUEL": "DUEL makes two cards damage each other alternately.",
 }
 
 TERM_ORDER = [
-    "ON PLAY", "ON DEATH", "ABILITY",
+    "DEPLOY", "DEATHWISH", "ORDER", "ABILITY",
     "HP", "SCORE",
     "CARDS", "HAND", "FIELD", "DISCARD PILE",
-    "DAMAGE", "HEAL", "DRAW", "DISCARD", "GOLD",
-    "EXECUTE", "REVIVE", "BRIBE", "MOVE", "SUMMON",
-    "PLAGUE", "VIGOR", "DECAY", "FLOURISH", "SHIELD", "IMMUNITY",
+    "DAMAGE", "BOOST", "HEAL", "DRAIN", "DRAW", "DISCARD", "GOLD",
+    "DESTROY", "BANISH", "REVIVE", "DUEL", "CLASH",
+    "BLEEDING", "VITALITY", "POISON", "SHIELD", "IMMUNITY", "LOCK", "VEIL",
 ]
 
 
@@ -99,19 +103,21 @@ def _ability_terms(card: Card) -> List[str]:
     if getattr(card, "silenced_turns", 0) > 0:
         sources.append("silenced")
     if card.on_play not in (None, Effect.NONE):
-        sources.append("ON PLAY")
+        sources.append("DEPLOY")
         sources.append(str(EFFECT_LABEL.get(card.on_play, getattr(card.on_play, "value", ""))))
     if card.on_death not in (None, Effect.NONE):
-        sources.append("ON DEATH")
+        sources.append("DEATHWISH")
         sources.append(str(EFFECT_LABEL.get(card.on_death, getattr(card.on_death, "value", ""))))
     text = " ".join(sources).lower().strip()
     if not text:
         return []
     terms = set()
-    if "on play" in text:
-        terms.add("ON PLAY")
-    if "on death" in text:
-        terms.add("ON DEATH")
+    if "deploy" in text:
+        terms.add("DEPLOY")
+    if "deathwish" in text:
+        terms.add("DEATHWISH")
+    if "order" in text:
+        terms.add("ORDER")
     if "ability" in text:
         terms.add("ABILITY")
     if "hp" in text:
@@ -137,27 +143,33 @@ def _ability_terms(card: Card) -> List[str]:
     if "gold" in text:
         terms.add("GOLD")
     if "destroy" in text:
-        terms.add("EXECUTE")
+        terms.add("DESTROY")
+    if "banish" in text:
+        terms.add("BANISH")
+    if "boost" in text:
+        terms.add("BOOST")
+    if "drain" in text:
+        terms.add("DRAIN")
     if "return" in text and ("discard" in text or "field" in text):
         terms.add("REVIVE")
-    if "bribe" in text:
-        terms.add("BRIBE")
-    if "move" in text:
-        terms.add("MOVE")
-    if "summon" in text:
-        terms.add("SUMMON")
-    if "plague" in text:
-        terms.add("PLAGUE")
-    if "vigor" in text:
-        terms.add("VIGOR")
-    if "decay" in text:
-        terms.add("DECAY")
-    if "flourish" in text:
-        terms.add("FLOURISH")
+    if "bleeding" in text:
+        terms.add("BLEEDING")
+    if "vitality" in text:
+        terms.add("VITALITY")
+    if "poison" in text:
+        terms.add("POISON")
     if "shield" in text:
         terms.add("SHIELD")
     if "immunity" in text:
         terms.add("IMMUNITY")
+    if "lock" in text:
+        terms.add("LOCK")
+    if "veil" in text:
+        terms.add("VEIL")
+    if "duel" in text:
+        terms.add("DUEL")
+    if "clash" in text:
+        terms.add("CLASH")
     return [term for term in TERM_ORDER if term in terms]
 
 
@@ -308,7 +320,7 @@ def draw_hover_panel(
                 cy += note.get_height() + 2
 
     if not has_ability_text:
-        for label, eff in (("ON PLAY", card.on_play), ("ON DEATH", card.on_death)):
+        for label, eff in (("DEPLOY", card.on_play), ("DEATHWISH", card.on_death)):
             if eff in (None, Effect.NONE):
                 continue
             line = f"{label}:  {EFFECT_LABEL.get(eff, getattr(eff, 'value', str(eff)))}"
@@ -318,7 +330,19 @@ def draw_hover_panel(
         if has_runtime_effect:
             cy += 6
 
-    status_list = sorted(getattr(card, "statuses", set()) or set())
+    raw_statuses = getattr(card, "statuses", {}) or {}
+    if isinstance(raw_statuses, dict):
+        status_list = []
+        for name in sorted(raw_statuses):
+            value = raw_statuses[name]
+            if isinstance(value, bool):
+                if value:
+                    status_list.append(name)
+            else:
+                count = int(value)
+                status_list.append(f"{name}:{count}" if count > 1 else name)
+    else:
+        status_list = sorted(getattr(card, "statuses", set()) or set())
     if getattr(card, "silenced_turns", 0) > 0:
         status_list.append(f"SILENCED({card.silenced_turns})")
     if status_list:

@@ -14,10 +14,10 @@ import time
 from typing import Any, Callable, List
 
 from core.card import Card
-from core.combos import multiplier
-from core.effects import apply_effect
+from core.combos import active_combos, multiplier
+from core.effects import _consume_protection, apply_effect
 from core.player import Player
-from core.triggers import apply_status_ticks, fire_triggers
+from core.triggers import apply_status_ticks, fire_triggers, normalize_trigger_name
 
 
 class Phase(Enum):
@@ -83,11 +83,28 @@ class GameState:
         self.start_turn()
 
     def _format_card_debug(self, card: Card) -> str:
-        raw_statuses = getattr(card, "statuses", set()) or set()
-        if isinstance(raw_statuses, list):
-            statuses = ",".join(sorted(set(raw_statuses)))
+        raw_statuses = getattr(card, "statuses", {}) or {}
+        if isinstance(raw_statuses, dict):
+            labels: list[str] = []
+            for name in sorted(raw_statuses):
+                value = raw_statuses[name]
+                if isinstance(value, bool):
+                    if value:
+                        labels.append(name)
+                    continue
+                try:
+                    qty = int(value)
+                except Exception:
+                    qty = 1
+                if qty > 1:
+                    labels.append(f"{name}:{qty}")
+                elif qty == 1:
+                    labels.append(name)
+            statuses = ",".join(labels)
+        elif isinstance(raw_statuses, list):
+            statuses = ",".join(sorted(set(str(v) for v in raw_statuses)))
         else:
-            statuses = ",".join(sorted(raw_statuses))
+            statuses = ",".join(sorted(str(v) for v in raw_statuses))
         silence = int(getattr(card, "silenced_turns", 0) or 0)
         effect = str(getattr(card, "effect_type", "NONE") or "NONE")
         trigger = str(getattr(card, "ability_trigger", "NO ABILITY") or "NO ABILITY")
@@ -261,8 +278,17 @@ class GameState:
         if self.active_player.play_card(card):
             self.main_action_taken = True
             self.log_event(f"{self.active_player.name} plays {card.title}")
-            self.debug(f"Firing ON PLAY triggers for {self.active_player.name}.", include_state=True)
-            fire_triggers("ON PLAY", self, self.active_player, source_card=card)
+            trigger = normalize_trigger_name(getattr(card, "ability_trigger", ""))
+            if trigger == "TIMER":
+                statuses = getattr(card, "statuses", {})
+                if not isinstance(statuses, dict):
+                    statuses = {}
+                    card.statuses = statuses
+                statuses["TIMER"] = max(0, int(getattr(card, "trigger_value", 0) or 0))
+            self.debug(f"Firing DEPLOY triggers for {self.active_player.name}.", include_state=True)
+            fire_triggers("DEPLOY", self, self.active_player, source_card=card)
+            self._check_adrenaline_triggers(self.active_player)
+            self._check_adrenaline_triggers(self.opponent)
             return True
         self.debug(f"PLAY failed for {card.title}: card not in hand or field limit reached.", include_state=True)
         return False
@@ -278,6 +304,8 @@ class GameState:
         if self.active_player.discard_from_hand(card):
             self.main_action_taken = True
             self.log_event(f"{self.active_player.name} discards {card.title}")
+            self._check_adrenaline_triggers(self.active_player)
+            self._check_adrenaline_triggers(self.opponent)
             return True
         self.debug(f"DISCARD failed for {card.title}: not in hand.", include_state=True)
         return False
@@ -301,20 +329,80 @@ class GameState:
             self.debug(f"ATTACK blocked: target {target.title} not on opponent field.")
             return False
 
+        raw_damage = max(0, int(attacker.base_score))
+        dealt = _consume_protection(target, raw_damage)
         before_hp = target.hp
-        target.hp -= attacker.base_score
+        target.hp -= dealt
         self.debug(
-            f"ATTACK resolved: {attacker.title} -> {target.title}, damage={attacker.base_score}, hp {before_hp}->{target.hp}."
+            f"ATTACK resolved: {attacker.title} -> {target.title}, damage={raw_damage}, dealt={dealt}, hp {before_hp}->{target.hp}."
         )
-        self.log_event(f"{attacker.title} hits {target.title} for {attacker.base_score}")
+        self.log_event(f"{attacker.title} hits {target.title} for {dealt}")
         if target.hp <= 0:
-            self.kill_card(self.opponent, target)
+            self.kill_card(self.opponent, target, killer_card=attacker, killer_owner=self.active_player)
             self.log_event(f"{attacker.title} destroys {target.title}")
 
         self.main_action_taken = True
+        self._check_adrenaline_triggers(self.active_player)
+        self._check_adrenaline_triggers(self.opponent)
         return True
 
-    def kill_card(self, owner: Player, dead_card: Card) -> None:
+    def try_order(self, card: Card) -> bool:
+        """Activate ORDER / ORDER_ZEAL ability once per turn during MAIN."""
+        if self.phase != Phase.MAIN or self.main_action_taken:
+            self.debug(
+                f"ORDER blocked for {card.title}: phase={self.phase.value}, main_action_taken={self.main_action_taken}."
+            )
+            return False
+        if self.is_targeting_active():
+            self.debug(f"ORDER blocked for {card.title}: targeting is active.")
+            return False
+        if card not in self.active_player.on_field:
+            self.debug(f"ORDER blocked for {card.title}: card not on active field.")
+            return False
+        trigger = normalize_trigger_name(getattr(card, "ability_trigger", ""))
+        if trigger not in {"ORDER", "ORDER_ZEAL"}:
+            self.debug(f"ORDER blocked for {card.title}: trigger={trigger}.")
+            return False
+        if int(getattr(card, "silenced_turns", 0) or 0) > 0:
+            self.debug(f"ORDER blocked for {card.title}: silenced_turns={card.silenced_turns}.")
+            return False
+        used_turn = int(getattr(card, "order_used_turn", -1) or -1)
+        if used_turn == self.turn_number:
+            self.debug(f"ORDER blocked for {card.title}: already used this turn.")
+            return False
+
+        setattr(card, "order_used_turn", self.turn_number)
+        self.main_action_taken = True
+        self.debug(f"ORDER attempt by {self.active_player.name}: {card.title}")
+        msg = apply_effect(card, self, self.active_player)
+        if msg:
+            self.log_event(msg)
+        else:
+            self.debug(f"ORDER no-op for {card.title}.")
+        self._check_adrenaline_triggers(self.active_player)
+        self._check_adrenaline_triggers(self.opponent)
+        return True
+
+    def _check_adrenaline_triggers(self, owner: Player) -> None:
+        for card in list(owner.on_field):
+            if card not in owner.on_field:
+                continue
+            if normalize_trigger_name(getattr(card, "ability_trigger", "")) != "ADRENALINE":
+                continue
+            threshold = int(getattr(card, "trigger_value", 0) or 0)
+            if len(owner.hand) <= threshold:
+                msg = apply_effect(card, self, owner)
+                if msg:
+                    self.log_event(msg)
+
+    def kill_card(
+        self,
+        owner: Player,
+        dead_card: Card,
+        *,
+        killer_card: Card | None = None,
+        killer_owner: Player | None = None,
+    ) -> None:
         if dead_card not in owner.on_field and dead_card in owner.discard:
             self.debug(f"KILL skipped for {dead_card.title}: already in discard.")
             return
@@ -322,19 +410,46 @@ class GameState:
         dead_card.hp = 0
         if dead_card in owner.on_field:
             owner.on_field.remove(dead_card)
-        if dead_card not in owner.discard:
+        dead_card.graveyard_eligible = True
+        dead_statuses = getattr(dead_card, "statuses", {})
+        doomed = False
+        if isinstance(dead_statuses, dict):
+            doomed = bool(dead_statuses.get("DOOMED"))
+        if not doomed and dead_card not in owner.discard:
             owner.discard.append(dead_card)
         enemy = self.players[1 - self.players.index(owner)]
-        trigger = (dead_card.ability_trigger or "").strip().upper()
-        if trigger in {"ON DEATH", "ON DEATH:SELF"}:
-            self.debug(f"Applying ON DEATH:self for {dead_card.title}.")
+        trigger = normalize_trigger_name(getattr(dead_card, "ability_trigger", ""))
+        if trigger == "DEATHWISH":
+            self.debug(f"Applying DEATHWISH for {dead_card.title}.")
             msg = apply_effect(dead_card, self, owner)
             if msg:
                 self.log_event(msg)
+        if killer_card is not None and killer_owner is not None:
+            killer_owner.kills = int(getattr(killer_owner, "kills", 0) or 0) + 1
+            if normalize_trigger_name(getattr(killer_card, "ability_trigger", "")) == "DEATHBLOW":
+                deathblow_msg = apply_effect(killer_card, self, killer_owner)
+                if deathblow_msg:
+                    self.log_event(deathblow_msg)
         self.debug(f"Firing ON DEATH:ALLY for {owner.name}.")
         fire_triggers("ON DEATH:ALLY", self, owner, source_card=dead_card)
         self.debug(f"Firing ON DEATH:ENEMY for {enemy.name}.")
         fire_triggers("ON DEATH:ENEMY", self, enemy, source_card=dead_card)
+
+        for blood_owner in self.players:
+            kills = int(getattr(blood_owner, "kills", 0) or 0)
+            for card in list(blood_owner.on_field):
+                if card not in blood_owner.on_field:
+                    continue
+                if normalize_trigger_name(getattr(card, "ability_trigger", "")) != "BLOODTHIRST":
+                    continue
+                threshold = int(getattr(card, "trigger_value", 0) or 0)
+                if kills >= threshold:
+                    blood_msg = apply_effect(card, self, blood_owner)
+                    if blood_msg:
+                        self.log_event(blood_msg)
+
+        self._check_adrenaline_triggers(owner)
+        self._check_adrenaline_triggers(enemy)
         self.debug(f"KILL end for {dead_card.title}.", include_state=True)
 
     def handle_card_death(
@@ -372,8 +487,6 @@ class GameState:
         fire_triggers("END OF TURN", self, ending_enemy)
         self.debug(f"Applying status ticks for {ending_owner.name}.")
         apply_status_ticks(self, ending_owner)
-        self.debug(f"Applying status ticks for {ending_enemy.name}.")
-        apply_status_ticks(self, ending_enemy)
         self.active_idx = 1 - self.active_idx
         self.turn_number += 1
         self.debug("END TURN swap complete.", include_state=True)
@@ -392,8 +505,20 @@ class GameState:
         """Raw Σ(base_score) over living field cards — no multiplier."""
         return sum(c.base_score for c in player.on_field)
 
+    def graveyard_eligible_count(self, player: Player) -> int:
+        return sum(1 for card in player.discard if bool(getattr(card, "graveyard_eligible", False)))
+
+    def active_combos_for(self, player: Player) -> list[tuple[str, float]]:
+        return active_combos(
+            player.on_field,
+            graveyard_eligible_count=self.graveyard_eligible_count(player),
+        )
+
     def multiplier_for(self, player: Player) -> float:
-        return multiplier(player.on_field)
+        return multiplier(
+            player.on_field,
+            graveyard_eligible_count=self.graveyard_eligible_count(player),
+        )
 
     def score_for(self, player: Player) -> int:
         """Final score = floor(base_sum × multiplier) (GDD §5.2)."""

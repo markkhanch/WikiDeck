@@ -9,6 +9,7 @@ PLAY_CARD = "play_card"
 END_TURN = "end_turn"
 TARGET_SELECT = "target_select"
 DISCARD_CARD = "discard_card"
+ORDER_CARD = "order_card"
 
 ROLE = "role"
 GAME_STATE = "game_state"

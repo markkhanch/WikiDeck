@@ -1,8 +1,10 @@
 import socket
+import ipaddress
 
 import pygame
 
 from config import SCREEN_WIDTH
+from data.settings_service import network_ports, target_fps
 from network.client import NetworkClient
 from network.protocol import CONNECTION_STATUS, ERROR, GAME_STATE, ROLE
 from network.server import ServerHandle, start_background_server
@@ -16,25 +18,73 @@ from ui.screens.common import (
 )
 
 
-def _local_ip() -> str:
+def _is_valid_host_ip(ip: str) -> bool:
     try:
-        return socket.gethostbyname(socket.gethostname())
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if not isinstance(addr, ipaddress.IPv4Address):
+        return False
+    return not (addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_unspecified)
+
+
+def _local_ip() -> str:
+    candidates: list[str] = []
+
+    for target in (("8.8.8.8", 80), ("1.1.1.1", 80), ("192.168.0.1", 80), ("10.0.0.1", 80)):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.connect(target)
+                ip = str(sock.getsockname()[0] or "").strip()
+                if _is_valid_host_ip(ip):
+                    candidates.append(ip)
+        except OSError:
+            continue
+
+    try:
+        _name, _aliases, ips = socket.gethostbyname_ex(socket.gethostname())
+        for ip in ips:
+            ip = str(ip or "").strip()
+            if _is_valid_host_ip(ip):
+                candidates.append(ip)
     except OSError:
+        pass
+
+    try:
+        infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET, socket.SOCK_DGRAM)
+        for info in infos:
+            ip = str(info[4][0] or "").strip()
+            if _is_valid_host_ip(ip):
+                candidates.append(ip)
+    except OSError:
+        pass
+
+    unique = list(dict.fromkeys(candidates))
+    if not unique:
         return "127.0.0.1"
+
+    for ip in unique:
+        try:
+            if ipaddress.ip_address(ip).is_private:
+                return ip
+        except ValueError:
+            continue
+    return unique[0]
 
 
 def _parse_host_value(raw: str) -> tuple[str, tuple[int, ...]]:
+    default_ports = network_ports()
     value = (raw or "").strip()
     if not value:
-        return "127.0.0.1", (8765, 8766, 8767)
+        return "127.0.0.1", default_ports
     if ":" in value:
         host, _, port_raw = value.partition(":")
         try:
             port = int(port_raw.strip())
             return host.strip() or "127.0.0.1", (port,)
         except ValueError:
-            return host.strip() or "127.0.0.1", (8765, 8766, 8767)
-    return value, (8765, 8766, 8767)
+            return host.strip() or "127.0.0.1", default_ports
+    return value, default_ports
 
 
 def _cleanup(client: NetworkClient | None, server_handle: ServerHandle | None) -> None:
@@ -60,7 +110,7 @@ def run_host_game(screen: pygame.Surface, fonts: dict, background: pygame.Surfac
         status = f"Failed to start host server: {exc}"
 
     while True:
-        clock.tick(60)
+        clock.tick(target_fps())
         mx, my = pygame.mouse.get_pos()
         close_rect = close_button_rect()
 
@@ -76,7 +126,8 @@ def run_host_game(screen: pygame.Surface, fonts: dict, background: pygame.Surfac
                 return "menu"
 
         if client is not None:
-            for msg in client.poll():
+            messages = client.poll()
+            for idx, msg in enumerate(messages):
                 msg_type = msg.get("type")
                 data = msg.get("data", {})
                 if msg_type == ROLE:
@@ -91,6 +142,7 @@ def run_host_game(screen: pygame.Surface, fonts: dict, background: pygame.Surfac
                     elif connection_status == "closed":
                         status = "Connection closed."
                 elif msg_type == GAME_STATE:
+                    client.requeue_messages(messages[idx:])
                     return {"client": client, "server_handle": server_handle, "role": role}
                 elif msg_type == ERROR:
                     status = str(data.get("text", "Unknown network error"))
@@ -131,7 +183,7 @@ def run_join_game(screen: pygame.Surface, fonts: dict, background: pygame.Surfac
     connected = False
 
     while True:
-        clock.tick(60)
+        clock.tick(target_fps())
         mx, my = pygame.mouse.get_pos()
         close_rect = close_button_rect()
 
@@ -171,7 +223,8 @@ def run_join_game(screen: pygame.Surface, fonts: dict, background: pygame.Surfac
                         host_text += event.unicode
 
         if client is not None:
-            for msg in client.poll():
+            messages = client.poll()
+            for idx, msg in enumerate(messages):
                 msg_type = msg.get("type")
                 data = msg.get("data", {})
                 if msg_type == CONNECTION_STATUS:
@@ -188,6 +241,7 @@ def run_join_game(screen: pygame.Surface, fonts: dict, background: pygame.Surfac
                     role = str(data.get("role", "") or "")
                     status = f"Connected as {role}. Waiting for host..."
                 elif msg_type == GAME_STATE:
+                    client.requeue_messages(messages[idx:])
                     return {"client": client, "server_handle": None, "role": role}
                 elif msg_type == ERROR:
                     status = str(data.get("text", "Network error"))

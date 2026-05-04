@@ -130,6 +130,15 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
 
         # One-time migration from generated_cards → cards (title+rarity)
         conn.execute(
@@ -149,6 +158,8 @@ def init_db() -> None:
             conn.execute(
                 "INSERT OR IGNORE INTO decks (id, name, is_active) VALUES ('default', 'Active Deck', 1)"
             )
+        conn.execute("DELETE FROM collection WHERE count <= 0")
+        conn.execute("DELETE FROM deck_cards WHERE count <= 0")
 
 
 def _get_article_from_db(title: str) -> Optional[dict]:
@@ -353,6 +364,8 @@ def get_active_deck_id() -> str:
 
 
 def add_to_collection(title: str, rarity: str, count: int = 1) -> None:
+    if count <= 0:
+        raise ValueError("add_to_collection count must be > 0")
     with _connect() as conn:
         conn.execute(
             """
@@ -367,7 +380,7 @@ def add_to_collection(title: str, rarity: str, count: int = 1) -> None:
 def get_collection() -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT title, rarity, count FROM collection ORDER BY rarity, title"
+            "SELECT title, rarity, count FROM collection WHERE count > 0 ORDER BY rarity, title"
         ).fetchall()
     return [{"title": r["title"], "rarity": r["rarity"], "count": r["count"]} for r in rows]
 
@@ -379,7 +392,7 @@ def get_deck_cards(deck_id: Optional[str] = None) -> list[dict]:
             """
             SELECT title, rarity, count
             FROM deck_cards
-            WHERE deck_id = ?
+            WHERE deck_id = ? AND count > 0
             ORDER BY rarity, title
             """,
             (deck_id,),
@@ -407,6 +420,8 @@ def set_deck_count(title: str, rarity: str, count: int, deck_id: Optional[str] =
 
 
 def add_to_deck(title: str, rarity: str, count: int = 1, deck_id: Optional[str] = None) -> None:
+    if count <= 0:
+        raise ValueError("add_to_deck count must be > 0")
     deck_id = deck_id or get_active_deck_id()
     with _connect() as conn:
         conn.execute(

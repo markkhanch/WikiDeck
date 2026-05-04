@@ -18,8 +18,6 @@ from config import (
     SCREEN_HEIGHT,
     WINDOW_TITLE,
     BG_IMAGE_PATH,
-    USE_OLLAMA_GENERATOR,
-    DECK_MIN,
 )
 from core.card import Card
 from core.card_factory import build_card, build_card_from_spec
@@ -32,7 +30,7 @@ from data.ollama_gen import (
     ollama_available,
     get_article_from_pool,
 )
-from starter_deck import STARTER_CARDS
+from data.settings_service import ensure_loaded, get_bool, get_int
 from ui.screens.collection import run_collection
 from ui.screens.deck_builder import run_deck_builder
 from ui.screens.main_menu import run_main_menu
@@ -46,6 +44,29 @@ from ui.screens.shop import run_shop
 
 # ---------- asset loading ----------
 
+STARTER_CARDS = [
+    ("Albert Einstein",        "LIVING",     3, 4, "DRAW_1",         "NONE"),
+    ("Charles Darwin",         "LIVING",     4, 3, "NONE",           "DRAW_1"),
+    ("William Shakespeare",    "LIVING",     3, 3, "NONE",           "NONE"),
+    ("Moon",                   "PLACES",     4, 3, "NONE",           "NONE"),
+    ("Mount Everest",          "PLACES",     6, 2, "NONE",           "NONE"),
+    ("Pacific Ocean",          "PLACES",     7, 1, "HEAL_SELF_2",    "NONE"),
+    ("World War II",           "EVENTS",     3, 5, "DAMAGE_ENEMY_2", "NONE"),
+    ("French Revolution",      "EVENTS",     4, 4, "NONE",           "DAMAGE_ENEMY_2"),
+    ("Renaissance",            "EVENTS",     4, 3, "BUFF_SELF_1",    "NONE"),
+    ("Fire",                   "SCIENCE",    4, 3, "DAMAGE_ENEMY_2", "NONE"),
+    ("Water",                  "SCIENCE",    5, 2, "NONE",           "NONE"),
+    ("Sun",                    "SCIENCE",    3, 4, "NONE",           "NONE"),
+    ("Computer",               "TECHNOLOGY", 3, 4, "DRAW_1",         "NONE"),
+    ("Internet",               "TECHNOLOGY", 2, 5, "DRAW_1",         "NONE"),
+    ("Wheel",                  "TECHNOLOGY", 4, 2, "NONE",           "NONE"),
+    ("Jazz",                   "CULTURE",    3, 3, "NONE",           "NONE"),
+    ("Great Pyramid of Giza",  "CULTURE",    6, 2, "NONE",           "NONE"),
+    ("Democracy",              "CONCEPTS",   5, 2, "NONE",           "NONE"),
+    ("Gravity",                "CONCEPTS",   4, 3, "BUFF_SELF_1",    "NONE"),
+    ("Time",                   "CONCEPTS",   3, 3, "NONE",           "DRAW_1"),
+]
+
 def load_background() -> pygame.Surface | None:
     if not os.path.isfile(BG_IMAGE_PATH):
         return None
@@ -55,10 +76,13 @@ def load_background() -> pygame.Surface | None:
 
 def build_starter_base_cards() -> list[Card]:
     """Fetch each Wikipedia article once; return a list of Card templates."""
+    from core.effects import Effect
     print("Building starter deck — fetching Wikipedia articles...")
     cards = []
-    for title, theme, hp, base_score, on_play, on_death in STARTER_CARDS:
+    for title, theme, hp, base_score, on_play_str, on_death_str in STARTER_CARDS:
         print(f"  {title} ...")
+        on_play = getattr(Effect, on_play_str, Effect.NONE)
+        on_death = getattr(Effect, on_death_str, Effect.NONE)
         cards.append(build_card(title, theme, hp, base_score, on_play, on_death, rarity="COMMON"))
     return cards
 
@@ -134,11 +158,13 @@ def _cleanup_network_session(session: dict | None) -> None:
 
 def run_app() -> None:
     pygame.init()
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+    init_db()
+    ensure_loaded()
+    display_flags = pygame.FULLSCREEN if get_bool("display.fullscreen") else 0
+    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), display_flags)
     pygame.display.set_caption(WINDOW_TITLE)
     fonts = make_fonts()
 
-    init_db()
     ensure_shop_singles(min_count=2)
     background = load_background()
 
@@ -148,7 +174,13 @@ def run_app() -> None:
         if state == "menu":
             state = run_main_menu(screen, fonts, background)
         elif state == "play":
-            state = run_play_menu(screen, fonts, background, deck_size(), DECK_MIN)
+            state = run_play_menu(
+                screen,
+                fonts,
+                background,
+                deck_size(),
+                get_int("gameplay.deck_min"),
+            )
         elif state == "match":
             base_cards = build_cards_from_deck()
             state = run_match(screen, fonts, background, base_cards)
@@ -162,6 +194,9 @@ def run_app() -> None:
             state = run_profile(screen, fonts, background)
         elif state == "settings":
             state = run_settings(screen, fonts, background)
+            current_screen = pygame.display.get_surface()
+            if current_screen is not None:
+                screen = current_screen
         elif state == "host_game":
             result = run_host_game(screen, fonts, background)
             if isinstance(result, dict):

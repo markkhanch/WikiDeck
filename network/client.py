@@ -10,10 +10,12 @@ from typing import Iterable
 
 import websockets
 
+from data.settings_service import get_bool, network_ports
 from network.protocol import (
     CONNECTION_STATUS,
     ERROR,
     ROLE,
+    YOUR_TURN,
     decode,
     encode,
     make_message,
@@ -34,15 +36,17 @@ class NetworkClient:
         self._stop_event = threading.Event()
 
     def _log(self, text: str) -> None:
+        if not get_bool("debug.network_verbose_logs"):
+            return
         ts = time.strftime("%H:%M:%S")
         print(f"[net-client][{ts}] {text}", flush=True)
 
-    def connect(self, host: str, ports: Iterable[int] = (8765, 8766, 8767)) -> None:
+    def connect(self, host: str, ports: Iterable[int] | None = None) -> None:
         if self.thread and self.thread.is_alive():
             self._log("Connect ignored: network thread already running.")
             return
         self._stop_event.clear()
-        port_list = [int(p) for p in ports]
+        port_list = [int(p) for p in (ports if ports is not None else network_ports())]
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(
             target=self._thread_entry,
@@ -65,6 +69,8 @@ class NetworkClient:
             if not self.loop.is_closed():
                 self.loop.stop()
                 self.loop.close()
+            self.loop = None
+            self.thread = None
             self._log("Network loop stopped.")
 
     async def _run(self, host: str, ports: tuple[int, ...]) -> None:
@@ -127,6 +133,10 @@ class NetworkClient:
                 if msg_type == ROLE:
                     role_value = payload.get("data", {}).get("role")
                     self.role = str(role_value) if role_value else None
+                    self.is_my_turn = False
+                elif msg_type == YOUR_TURN:
+                    player = str(payload.get("data", {}).get("player", "") or "")
+                    self.is_my_turn = bool(self.role and player and player == self.role)
                 self._log(f"RX {msg_type}: {payload.get('data', {})}")
                 self.incoming.put(payload)
         except websockets.exceptions.ConnectionClosed as exc:
@@ -170,8 +180,23 @@ class NetworkClient:
                 break
         return messages
 
+    def requeue_messages(self, messages: Iterable[dict]) -> None:
+        for msg in messages:
+            self.incoming.put(msg)
+
     def close(self) -> None:
         self._stop_event.set()
-        if self.loop and self.ws is not None:
-            asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop)
+        close_future = None
+        if self.loop is not None and self.ws is not None and not self.loop.is_closed():
+            try:
+                close_future = asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop)
+            except RuntimeError:
+                close_future = None
+        if close_future is not None:
+            try:
+                close_future.result(timeout=1.0)
+            except Exception:
+                pass
+        if self.thread is not None and self.thread.is_alive() and threading.current_thread() is not self.thread:
+            self.thread.join(timeout=1.0)
         self._log("Close requested.")

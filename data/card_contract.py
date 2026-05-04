@@ -22,59 +22,95 @@ ALLOWED_EPOCHS = {
     "TIMELESS",
 }
 ALLOWED_TRIGGERS = {
-    "ON PLAY",
-    "ON DEATH:self",
+    "DEPLOY",
+    "ORDER",
+    "ORDER_ZEAL",
+    "DEATHWISH",
+    "DEATHBLOW",
     "ON DEATH:ally",
     "ON DEATH:enemy",
-    "ON HIT:self",
-    "ON HIT:enemy",
     "END OF TURN",
     "START OF TURN",
+    "TIMER",
+    "ADRENALINE",
+    "BLOODTHIRST",
     "PASSIVE",
-    "ON COMBO:any",
-    "ON COMBO:link",
-    "ACTIVATED",
-    "CHARGED",
-    "SACRIFICE",
-    "RANDOM",
     "NO ABILITY",
 }
 ALLOWED_EFFECTS = {
     "DAMAGE",
+    "DESTROY",
+    "BANISH",
+    "BOOST",
     "HEAL",
-    "APPLY_PLAGUE",
-    "APPLY_VIGOR",
-    "APPLY_DECAY",
-    "APPLY_FLOURISH",
-    "APPLY_SHIELD",
+    "DRAIN",
+    "BLEEDING",
+    "POISON",
+    "VITALITY",
+    "SHIELD",
+    "IMMUNITY",
+    "LOCK",
+    "VEIL",
+    "DOOMED",
+    "DUEL",
+    "CLASH",
     "DRAW",
     "DISCARD",
     "GOLD",
-    "MOVE",
-    "SUMMON",
-    "NONE",
-    "APPLY_IMMUNITY",
-    "EXECUTE",
     "REVIVE",
-    "BRIBE",
+    "NONE",
 }
 
 # Only these are truly wired to gameplay in core/effects.py.
-GAMEPLAY_SUPPORTED_EFFECTS = {"DAMAGE", "HEAL", "DRAW", "APPLY_FLOURISH"}
-GAMEPLAY_SUPPORTED_TRIGGERS = {"ON PLAY", "ON DEATH:self"}
-
-NUMBERED_EFFECTS = {"DAMAGE", "HEAL", "DRAW", "DISCARD", "GOLD", "EXECUTE", "APPLY_IMMUNITY"}
-NUMBERLESS_EFFECTS = {
-    "APPLY_PLAGUE",
-    "APPLY_VIGOR",
-    "APPLY_DECAY",
-    "APPLY_FLOURISH",
-    "APPLY_SHIELD",
-    "MOVE",
-    "SUMMON",
-    "NONE",
+GAMEPLAY_SUPPORTED_EFFECTS = {
+    "DAMAGE",
+    "DESTROY",
+    "BANISH",
+    "BOOST",
+    "HEAL",
+    "DRAIN",
+    "BLEEDING",
+    "POISON",
+    "VITALITY",
+    "SHIELD",
+    "IMMUNITY",
+    "LOCK",
+    "VEIL",
+    "DOOMED",
+    "DUEL",
+    "CLASH",
+    "DRAW",
+    "DISCARD",
+    "GOLD",
     "REVIVE",
-    "BRIBE",
+    "NONE",
+}
+GAMEPLAY_SUPPORTED_TRIGGERS = ALLOWED_TRIGGERS
+
+NUMBERED_EFFECTS = {
+    "DAMAGE",
+    "BOOST",
+    "DRAIN",
+    "BLEEDING",
+    "POISON",
+    "VITALITY",
+    "DRAW",
+    "DISCARD",
+    "GOLD",
+}
+NUMBERLESS_EFFECTS = {
+    "DESTROY",
+    "BANISH",
+    "HEAL",
+    "SHIELD",
+    "IMMUNITY",
+    "LOCK",
+    "VEIL",
+    "DOOMED",
+    "DUEL",
+    "CLASH",
+    "REVIVE",
+    "NONE",
 }
 
 FORBIDDEN_WORDS = {
@@ -90,16 +126,23 @@ FORBIDDEN_WORDS = {
 
 EFFECT_KEYWORDS = {
     "DAMAGE": {"damage", "deal"},
+    "BOOST": {"boost"},
     "HEAL": {"heal", "restore"},
+    "DRAIN": {"drain"},
     "DRAW": {"draw"},
-    "APPLY_FLOURISH": {"flourish"},
-    "APPLY_PLAGUE": {"plague"},
-    "APPLY_VIGOR": {"vigor"},
-    "APPLY_DECAY": {"decay"},
-    "APPLY_SHIELD": {"shield"},
-    "EXECUTE": {"destroy"},
-    "REVIVE": {"return", "discard pile"},
     "GOLD": {"gold", "gain"},
+    "BLEEDING": {"bleeding"},
+    "VITALITY": {"vitality"},
+    "POISON": {"poison"},
+    "SHIELD": {"shield"},
+    "IMMUNITY": {"immunity"},
+    "LOCK": {"lock"},
+    "VEIL": {"veil"},
+    "DESTROY": {"destroy"},
+    "BANISH": {"banish"},
+    "DUEL": {"duel"},
+    "CLASH": {"clash"},
+    "REVIVE": {"return", "discard pile"},
 }
 
 _FIRST_INT_RE = re.compile(r"\b\d+\b")
@@ -210,7 +253,7 @@ def validate_card_contract(card: dict, *, strict_gameplay: bool = False) -> None
         if card["effect_type"] not in GAMEPLAY_SUPPORTED_EFFECTS:
             raise ValueError(f"Unsupported effect for gameplay: {card['effect_type']}")
 
-    if card["trigger"] not in {"CHARGED", "RANDOM"}:
+    if card["trigger"] not in {"TIMER", "ADRENALINE", "BLOODTHIRST"}:
         card["trigger_value"] = 0
     if card["effect_type"] in NUMBERLESS_EFFECTS:
         card["ability_value"] = 0

@@ -15,11 +15,11 @@ import websockets
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-from config import STARTING_HAND_SIZE
 from core.card import Card
 from core.card_factory import build_card_from_spec
 from core.game_state import GameState
 from core.player import Player
+from data.settings_service import get_bool, get_int, get_str, network_ports
 from data.db import get_cached_card, get_deck_cards, init_db
 from network.protocol import (
     DISCARD_CARD,
@@ -29,6 +29,7 @@ from network.protocol import (
     GAME_OVER,
     GAME_STATE,
     OPPONENT_DISCONNECTED,
+    ORDER_CARD,
     PLAY_CARD,
     ROLE,
     TARGET_SELECT,
@@ -47,6 +48,8 @@ _action_lock: asyncio.Lock | None = None
 
 
 def _log(text: str) -> None:
+    if not get_bool("debug.network_verbose_logs"):
+        return
     ts = time.strftime("%H:%M:%S")
     print(f"[net-server][{ts}] {text}", flush=True)
 
@@ -59,6 +62,8 @@ def _clone_card(card: Card) -> Card:
         base_score=card.base_score,
         theme=card.theme,
         rarity=card.rarity,
+        epoch=getattr(card, "epoch", "TIMELESS"),
+        nemesis=getattr(card, "nemesis", None),
         description=card.description,
         extract=card.extract,
         image=card.image,
@@ -66,6 +71,7 @@ def _clone_card(card: Card) -> Card:
         ability_trigger=card.ability_trigger,
         effect_type=getattr(card, "effect_type", "NONE"),
         ability_value=int(getattr(card, "ability_value", 0) or 0),
+        graveyard_eligible=bool(getattr(card, "graveyard_eligible", False)),
         statuses=set(getattr(card, "statuses", set()) or set()),
         silenced_turns=int(getattr(card, "silenced_turns", 0) or 0),
         on_play=card.on_play,
@@ -110,9 +116,14 @@ def initialize_game() -> GameState:
     base_cards = _build_base_cards_from_deck()
     p1 = Player(name="P1", deck=_make_shuffled_deck(base_cards))
     p2 = Player(name="P2", deck=_make_shuffled_deck(base_cards))
-    p1.draw_starting_hand(STARTING_HAND_SIZE)
-    p2.draw_starting_hand(STARTING_HAND_SIZE)
-    game = ServerGameState(players=[p1, p2], active_idx=0, verbose_terminal_logs=True)
+    starting_hand_size = get_int("gameplay.starting_hand_size")
+    p1.draw_starting_hand(starting_hand_size)
+    p2.draw_starting_hand(starting_hand_size)
+    game = ServerGameState(
+        players=[p1, p2],
+        active_idx=0,
+        verbose_terminal_logs=get_bool("debug.match_verbose_logs"),
+    )
     game.set_event_hook(lambda text: asyncio.create_task(broadcast_event(text)))
     game.start_match()
     _log("Game initialized.")
@@ -134,7 +145,10 @@ def _card_id(card: Card) -> int:
 
 
 def _find_in_cards(cards: list[Card], data: dict[str, Any]) -> Card | None:
-    wanted_id = int(data.get("card_id", 0) or 0)
+    try:
+        wanted_id = int(data.get("card_id", 0))
+    except (ValueError, TypeError):
+        return None
     wanted_title = str(data.get("card_title", "") or "")
     if wanted_id:
         for card in cards:
@@ -273,6 +287,17 @@ async def handle_action(role: str, message: dict[str, Any]) -> None:
             if not game_state.try_discard(card):
                 await _reject(role, "Cannot discard this card right now.")
                 return
+        elif action == ORDER_CARD:
+            if game_state.is_targeting_active():
+                await _reject(role, "Resolve targeting first.")
+                return
+            card = _find_in_cards(player.on_field, data)
+            if card is None:
+                await _reject(role, "Card not found on field.")
+                return
+            if not game_state.try_order(card):
+                await _reject(role, "Cannot activate ORDER for this card right now.")
+                return
         elif action == END_TURN:
             if game_state.is_targeting_active():
                 await _reject(role, "Resolve targeting first.")
@@ -378,7 +403,9 @@ class ServerHandle:
         _log("Stop requested.")
 
 
-def start_background_server(host: str = "0.0.0.0", ports: tuple[int, ...] = (8765, 8766, 8767)) -> ServerHandle:
+def start_background_server(host: str | None = None, ports: tuple[int, ...] | None = None) -> ServerHandle:
+    host = str(host or get_str("network.host_bind"))
+    ports = tuple(ports or network_ports())
     ready: "queue.Queue[tuple[str, int | None, str | None]]"
     import queue
 
@@ -436,15 +463,17 @@ async def main() -> None:
         ready.set()
 
     server = None
-    for port in (8765, 8766, 8767):
+    bind_host = get_str("network.host_bind")
+    ports = network_ports()
+    for port in ports:
         try:
-            server = await websockets.serve(handler, "0.0.0.0", port)
-            _log(f"WikiDeck server running on port {port}")
+            server = await websockets.serve(handler, bind_host, port)
+            _log(f"WikiDeck server running on {bind_host}:{port}")
             break
         except OSError as exc:
             _log(f"Port {port} unavailable: {exc}")
     if server is None:
-        raise RuntimeError("Could not bind to ports 8765-8767")
+        raise RuntimeError(f"Could not bind to ports {ports}")
     await notify_ready()
     try:
         await asyncio.Future()

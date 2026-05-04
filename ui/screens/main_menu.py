@@ -1,6 +1,7 @@
 import pygame
 
 from config import SCREEN_WIDTH, SCREEN_HEIGHT
+from data.settings_service import target_fps
 from ui.screens.common import draw_background, draw_title, draw_button, draw_close_button, close_button_rect
 
 
@@ -32,7 +33,7 @@ def run_main_menu(
     settings_rect = pygame.Rect(SCREEN_WIDTH - 160, SCREEN_HEIGHT - 60, 140, 36)
 
     while True:
-        clock.tick(60)
+        clock.tick(target_fps())
         mx, my = pygame.mouse.get_pos()
         close_rect = close_button_rect()
 

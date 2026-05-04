@@ -10,6 +10,7 @@ __pycache__/
 # Local runtime data (do not publish)
 data/wikideck.db
 ui/assets/card_images/
+.ollama_host
 
 # Local env files
 .env

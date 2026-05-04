@@ -12,16 +12,20 @@ if TYPE_CHECKING:
     from core.player import Player
 
 
+def normalize_trigger_name(value: str) -> str:
+    return str(value or "").strip().upper()
+
+
 def _normalized_trigger(card: "Card") -> str:
-    trigger = str(getattr(card, "ability_trigger", "") or "").strip().upper()
+    trigger = normalize_trigger_name(str(getattr(card, "ability_trigger", "") or ""))
     if trigger:
         return trigger
     on_play = getattr(card, "on_play", Effect.NONE)
     on_death = getattr(card, "on_death", Effect.NONE)
     if on_play != Effect.NONE:
-        return "ON PLAY"
+        return "DEPLOY"
     if on_death != Effect.NONE:
-        return "ON DEATH:SELF"
+        return "DEATHWISH"
     return "NO ABILITY"
 
 
@@ -38,10 +42,13 @@ def fire_triggers(
 ) -> None:
     """Apply all effects on owner field that match trigger_type."""
     source_name = source_card.title if source_card is not None else "-"
-    normalized = trigger_type.strip().upper()
+    normalized = normalize_trigger_name(trigger_type)
+    cards = list(owner.on_field)
+    if normalized == "DEPLOY":
+        cards = [source_card] if source_card in owner.on_field else []
     if game_state.is_targeting_active():
         _debug(game_state, f"TRIGGER deferred type={normalized} because targeting is active.")
-        for queued in list(owner.on_field):
+        for queued in cards:
             if _normalized_trigger(queued) == normalized and getattr(queued, "silenced_turns", 0) <= 0:
                 game_state.queue_pending_effect(queued, owner)
         return
@@ -49,14 +56,12 @@ def fire_triggers(
         game_state,
         f"TRIGGER fire type={normalized} owner={owner.name} source={source_name} field_cards={len(owner.on_field)}",
     )
-    cards = list(owner.on_field)
     for idx, card in enumerate(cards):
         if card not in owner.on_field:
             _debug(game_state, f"TRIGGER skip removed card={card.title}.")
             continue
         card_trigger = _normalized_trigger(card)
         if card_trigger != normalized:
-            _debug(game_state, f"TRIGGER skip {card.title}: trigger={card_trigger} != {normalized}.")
             continue
         if getattr(card, "silenced_turns", 0) > 0:
             _debug(game_state, f"TRIGGER skip {card.title}: silenced_turns={card.silenced_turns}.")
@@ -75,43 +80,74 @@ def fire_triggers(
             break
 
 
+def _status_count(card: "Card", status: str) -> int:
+    raw = getattr(card, "statuses", {}) or {}
+    if isinstance(raw, dict):
+        value = raw.get(status, 0)
+        if isinstance(value, bool):
+            return 1 if value else 0
+        try:
+            return max(0, int(value))
+        except Exception:
+            return 0
+    if isinstance(raw, (set, list, tuple)):
+        return 1 if status in raw else 0
+    return 0
+
+
+def _set_status(card: "Card", status: str, value: int | bool) -> None:
+    raw = getattr(card, "statuses", {})
+    if not isinstance(raw, dict):
+        if isinstance(raw, (set, list, tuple)):
+            raw = {str(name).upper(): 1 for name in raw}
+        else:
+            raw = {}
+        card.statuses = raw
+    if isinstance(value, bool):
+        if value:
+            raw[status] = True
+        else:
+            raw.pop(status, None)
+        return
+    if int(value) > 0:
+        raw[status] = int(value)
+    else:
+        raw.pop(status, None)
+
+
 def apply_status_ticks(game_state: "GameState", owner: "Player") -> None:
     _debug(game_state, f"STATUS ticks owner={owner.name} field_cards={len(owner.on_field)}")
     for card in list(owner.on_field):
         if card not in owner.on_field:
-            _debug(game_state, f"STATUS skip removed card={card.title}.")
             continue
 
-        raw_statuses = getattr(card, "statuses", set())
-        if isinstance(raw_statuses, list):
-            card.statuses = set(raw_statuses)
-        elif isinstance(raw_statuses, set):
-            card.statuses = raw_statuses
-        else:
-            card.statuses = set()
-        statuses = set(card.statuses)
-        _debug(game_state, f"STATUS card={card.title} statuses={sorted(statuses)} hp={card.hp} sc={card.base_score}")
-        if "PLAGUE" in statuses:
-            before = card.hp
+        # BLEEDING - deal 1 damage at end of turn and decrement stack.
+        bleeding = _status_count(card, "BLEEDING")
+        if bleeding > 0:
             card.hp -= 1
-            _debug(game_state, f"STATUS PLAGUE {card.title} hp {before}->{card.hp}")
+            _set_status(card, "BLEEDING", bleeding - 1)
             if card.hp <= 0:
-                game_state.log_event(f"{card.title}: PLAGUE deals 1 damage.")
                 game_state.kill_card(owner, card)
                 continue
-        if "VIGOR" in statuses:
-            before = card.hp
+
+        # VITALITY - heal 1 at end of turn and decrement stack.
+        vitality = _status_count(card, "VITALITY")
+        if vitality > 0:
             card.hp = min(card.hp + 1, max(1, int(getattr(card, "max_hp", card.hp))))
-            _debug(game_state, f"STATUS VIGOR {card.title} hp {before}->{card.hp}")
-        if "DECAY" in statuses:
-            before = card.base_score
-            card.base_score = max(0, card.base_score - 1)
-            _debug(game_state, f"STATUS DECAY {card.title} sc {before}->{card.base_score}")
-        if "FLOURISH" in statuses:
-            before = card.base_score
-            card.base_score += 1
-            _debug(game_state, f"STATUS FLOURISH {card.title} sc {before}->{card.base_score}")
-        if getattr(card, "silenced_turns", 0) > 0:
-            before = card.silenced_turns
-            card.silenced_turns -= 1
-            _debug(game_state, f"STATUS SILENCE {card.title} turns {before}->{card.silenced_turns}")
+            _set_status(card, "VITALITY", vitality - 1)
+
+        # POISON - destroy at 2+ stacks.
+        if _status_count(card, "POISON") >= 2:
+            game_state.kill_card(owner, card)
+            continue
+
+        # TIMER - countdown and fire card effect at zero.
+        timer = _status_count(card, "TIMER")
+        if timer > 0:
+            _set_status(card, "TIMER", timer - 1)
+            if timer - 1 == 0:
+                msg = apply_effect(card, game_state, owner)
+                if msg:
+                    game_state.log_event(msg)
+
+        # LOCK is permanent here, no tick-down.

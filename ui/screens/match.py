@@ -5,7 +5,6 @@ import pygame
 from config import (
     SCREEN_WIDTH,
     SCREEN_HEIGHT,
-    FPS,
     BG_DARK,
     BG_MID,
     BG_LIGHT,
@@ -21,7 +20,6 @@ from config import (
     P2_FIELD_ZONE,
     DIVIDER_Y,
     END_TURN_BUTTON_RECT,
-    STARTING_HAND_SIZE,
     NEON_GREEN,
     NEON_BLUE,
     NEON_RED,
@@ -29,23 +27,29 @@ from config import (
     MUTED_TEXT,
     GOLD,
 )
+from data.settings_service import get_bool, get_int, target_fps
 from core.card import Card
 from core.player import Player
 from core.game_state import GameState, Phase
-from core.combos import active_combos
 from network.protocol import (
     CONNECTION_STATUS,
+    DISCARD_CARD,
+    END_TURN,
     ERROR,
     EVENT,
     GAME_OVER,
     GAME_STATE,
+    ORDER_CARD,
     OPPONENT_DISCONNECTED,
+    PLAY_CARD,
     ROLE,
+    TARGET_SELECT,
     TARGETING,
     YOUR_TURN,
 )
 from network.sync import apply_serialized_state
 from ui.components.hover_panel import draw_hover_panel
+from ui.particles import particle_system
 from ui.screens.common import draw_close_button, close_button_rect
 
 
@@ -57,6 +61,8 @@ def _clone_card(c: Card) -> Card:
         base_score=c.base_score,
         theme=c.theme,
         rarity=c.rarity,
+        epoch=getattr(c, "epoch", "TIMELESS"),
+        nemesis=getattr(c, "nemesis", None),
         description=c.description,
         extract=c.extract,
         image=c.image,
@@ -64,6 +70,7 @@ def _clone_card(c: Card) -> Card:
         ability_trigger=c.ability_trigger,
         effect_type=getattr(c, "effect_type", "NONE"),
         ability_value=int(getattr(c, "ability_value", 0) or 0),
+        graveyard_eligible=bool(getattr(c, "graveyard_eligible", False)),
         statuses=set(getattr(c, "statuses", set()) or set()),
         silenced_turns=int(getattr(c, "silenced_turns", 0) or 0),
         on_play=c.on_play,
@@ -126,7 +133,7 @@ def _draw_hud(screen: pygame.Surface, game: GameState, fonts: dict) -> None:
         base = game.base_sum(p)
         mult = game.multiplier_for(p)
         score = game.score_for(p)
-        combos = active_combos(p.on_field)
+        combos = game.active_combos_for(p)
         combo_str = "  ".join(f"{n} +{b:.1f}x" for n, b in combos)
         line = (
             f"{p.name}  H:{len(p.hand)}  D:{len(p.deck)}  F:{len(p.on_field)}  "
@@ -272,14 +279,95 @@ def _owner_key_for_card(game: GameState, card: Card) -> str | None:
     return None
 
 
+def _fallback_event_rect() -> pygame.Rect:
+    rect = pygame.Rect(0, 0, 2, 2)
+    rect.center = (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+    return rect
+
+
+def _event_rects_for_text(game: GameState, event_text: str) -> tuple[pygame.Rect, pygame.Rect | None]:
+    text = str(event_text or "").strip().lower()
+    if not text:
+        return _fallback_event_rect(), None
+
+    matches: list[pygame.Rect] = []
+    seen_titles: set[str] = set()
+    for player in game.players:
+        for zone in (player.on_field, player.hand, player.discard):
+            for card in zone:
+                title = str(getattr(card, "title", "") or "").strip()
+                if not title:
+                    continue
+                title_key = title.lower()
+                if title_key in seen_titles or title_key not in text:
+                    continue
+                seen_titles.add(title_key)
+                matches.append(card.rect)
+
+    if matches:
+        source_rect = matches[0]
+        target_rect = matches[1] if len(matches) > 1 else None
+        return source_rect, target_rect
+
+    active = game.active_player
+    if active.on_field:
+        return active.on_field[0].rect, None
+    if active.hand:
+        return active.hand[0].rect, None
+    return _fallback_event_rect(), None
+
+
+def _emit_particles_for_event(event_text, source_rect, target_rect=None):
+    cx = source_rect.centerx
+    cy = source_rect.centery
+    tx = target_rect.centerx if target_rect else None
+    ty = target_rect.centery if target_rect else None
+    text = str(event_text or "").upper()
+    for keyword in [
+        "DAMAGE",
+        "BLEEDING",
+        "VITALITY",
+        "BOOST",
+        "SHIELD",
+        "POISON",
+        "DESTROY",
+        "BANISH",
+        "DEPLOY",
+        "DEATHWISH",
+        "GOLD",
+        "DRAW",
+        "DRAIN",
+        "DUEL",
+        "CLASH",
+        "LOCK",
+        "HEAL",
+        "REVIVE",
+        "TIMER",
+    ]:
+        if keyword in text:
+            particle_system.trigger(keyword, cx, cy, tx, ty)
+            break
+
+
+def _install_particle_log_hook(game: GameState) -> None:
+    original_log_event = game.log_event
+
+    def _log_event_with_particles(message: str) -> None:
+        clean = (message or "").strip()
+        original_log_event(message)
+        if not clean:
+            return
+        source_rect, target_rect = _event_rects_for_text(game, clean)
+        _emit_particles_for_event(clean, source_rect, target_rect)
+
+    game.log_event = _log_event_with_particles  # type: ignore[method-assign]
+
+
 def _append_network_event(game: GameState, text: str) -> None:
     clean = (text or "").strip()
     if not clean:
         return
-    game.last_event = clean
-    game.action_log.append(clean)
-    if len(game.action_log) > 5:
-        game.action_log = game.action_log[-5:]
+    game.log_event(clean)
 
 
 def _consume_network_messages(
@@ -287,7 +375,8 @@ def _consume_network_messages(
     network_client,
     my_role: str | None,
     status_line: str,
-) -> tuple[str | None, str, bool, bool]:
+    has_received_state: bool,
+) -> tuple[str | None, str, bool, bool, bool]:
     state_changed = False
     disconnected = False
     for msg in network_client.poll():
@@ -299,12 +388,28 @@ def _consume_network_messages(
             if my_role:
                 status_line = f"Connected as {my_role.upper()}."
         elif msg_type == GAME_STATE:
-            apply_serialized_state(game, data)
+            try:
+                apply_serialized_state(game, data)
+            except Exception as e:
+                print(f"[net] bad state packet: {e}")
+                return my_role, status_line, state_changed, disconnected, has_received_state
+            game.debug("RX game_state applied to local GameState.", include_state=True)
             state_changed = True
+            first_state = not has_received_state
+            has_received_state = True
+            active_player = str(data.get("active_player", "") or "").lower()
+            if my_role and active_player in {"p1", "p2"}:
+                network_client.is_my_turn = active_player == my_role
+            if first_state and status_line.strip().lower() == "waiting for server...":
+                status_line = "State synchronized."
         elif msg_type == YOUR_TURN:
             player = str(data.get("player", "") or "")
             if player and my_role:
-                status_line = "Your turn." if player == my_role else "Opponent turn..."
+                network_client.is_my_turn = player == my_role
+                status_line = "Your turn." if network_client.is_my_turn else "Opponent turn..."
+            elif player:
+                network_client.is_my_turn = False
+                status_line = "Turn updated."
         elif msg_type == TARGETING:
             prompt = str(data.get("prompt", "") or "")
             if prompt:
@@ -313,6 +418,8 @@ def _consume_network_messages(
             _append_network_event(game, str(data.get("text", "") or ""))
         elif msg_type == ERROR:
             status_line = str(data.get("text", "Network error") or "Network error")
+            if "connection closed" in status_line.lower():
+                disconnected = True
         elif msg_type == CONNECTION_STATUS:
             state = str(data.get("status", "") or "")
             if state == "connected":
@@ -321,8 +428,12 @@ def _consume_network_messages(
                 status_line = f"Connected to {host}:{port}"
             elif state == "failed":
                 status_line = str(data.get("error", "Connection failed"))
+                network_client.is_my_turn = False
+                disconnected = True
             elif state == "closed":
                 status_line = "Connection closed."
+                network_client.is_my_turn = False
+                disconnected = True
         elif msg_type == OPPONENT_DISCONNECTED:
             status_line = "Opponent disconnected."
             disconnected = True
@@ -332,7 +443,7 @@ def _consume_network_messages(
                 status_line = "Game over: draw"
             else:
                 status_line = f"Game over: {winner.upper()} wins"
-    return my_role, status_line, state_changed, disconnected
+    return my_role, status_line, state_changed, disconnected, has_received_state
 
 
 def _draw_network_status(
@@ -365,18 +476,31 @@ def run_match(
     if network_mode:
         p1 = Player(name="P1", deck=[])
         p2 = Player(name="P2", deck=[])
-        game = GameState(players=[p1, p2], active_idx=0)
+        game = GameState(
+            players=[p1, p2],
+            active_idx=0,
+            verbose_terminal_logs=get_bool("debug.match_verbose_logs"),
+        )
         game.phase = Phase.MAIN
         game.debug("Network match screen initialized; waiting for server state.", include_state=True)
     else:
         p1 = Player(name="P1", deck=_make_deck(base_cards))
         p2 = Player(name="P2", deck=_make_deck(base_cards))
-        p1.draw_starting_hand(STARTING_HAND_SIZE)
-        p2.draw_starting_hand(STARTING_HAND_SIZE)
-        game = GameState(players=[p1, p2], active_idx=0)
+        hand_size = get_int("gameplay.starting_hand_size")
+        p1.draw_starting_hand(hand_size)
+        p2.draw_starting_hand(hand_size)
+        game = GameState(
+            players=[p1, p2],
+            active_idx=0,
+            verbose_terminal_logs=get_bool("debug.match_verbose_logs"),
+        )
         game.start_match()
         game.debug("Match screen initialized and first turn started.", include_state=True)
     _relayout(game)
+    _install_particle_log_hook(game)
+    particle_system.particles.clear()
+    particle_system.shockwaves.clear()
+    particle_system.lightnings.clear()
 
     p1_field_zone = pygame.Rect(*P1_FIELD_ZONE)
     p2_field_zone = pygame.Rect(*P2_FIELD_ZONE)
@@ -386,15 +510,19 @@ def run_match(
     drag_offset = (0.0, 0.0)
     my_role = network_role
     network_status = "Waiting for server..."
+    has_received_state = False
+    if network_mode and network_client is not None:
+        network_client.is_my_turn = False
 
     while True:
-        clock.tick(FPS)
+        clock.tick(target_fps())
         if network_mode and network_client is not None:
-            my_role, network_status, state_changed, disconnected = _consume_network_messages(
+            my_role, network_status, state_changed, disconnected, has_received_state = _consume_network_messages(
                 game,
                 network_client,
                 my_role,
                 network_status,
+                has_received_state,
             )
             if disconnected:
                 return "menu"
@@ -405,7 +533,8 @@ def run_match(
         active = game.active_player
         my_player = _player_for_role(game, my_role) if network_mode else active
         controlling_player = my_player if my_player is not None else active
-        can_interact = (not network_mode) or (my_player is not None and active is my_player)
+        is_my_turn = (not network_mode) or bool(getattr(network_client, "is_my_turn", False))
+        can_interact = (not network_mode) or (my_player is not None and is_my_turn)
         if my_role == "p1":
             my_field_zone = p1_field_zone
         elif my_role == "p2":
@@ -459,7 +588,7 @@ def run_match(
                         if network_mode:
                             owner_key = _owner_key_for_card(game, clicked_target) or "p1"
                             network_client.send(
-                                "target_select",
+                                TARGET_SELECT,
                                 {
                                     "card_title": clicked_target.title,
                                     "owner": owner_key,
@@ -474,7 +603,7 @@ def run_match(
                 if end_turn_rect.collidepoint(mx, my) and game.can_end_turn() and can_interact:
                     game.debug(f"Input: End Turn clicked by {active.name}.")
                     if network_mode:
-                        network_client.send("end_turn", {})
+                        network_client.send(END_TURN, {})
                         network_status = "Ending turn..."
                     else:
                         game.end_turn()
@@ -508,7 +637,7 @@ def run_match(
                     if card.rect.collidepoint(mx, my):
                         if network_mode:
                             network_client.send(
-                                "discard_card",
+                                DISCARD_CARD,
                                 {
                                     "card_title": card.title,
                                     "card_id": int(getattr(card, "network_id", 0) or 0),
@@ -517,6 +646,26 @@ def run_match(
                             network_status = f"Discarding {card.title}..."
                         elif game.try_discard(card):
                             game.debug(f"Input: RMB discard {card.title}.")
+                            _relayout(game)
+                        break
+                else:
+                    for card in reversed(controlling_player.on_field):
+                        if not card.rect.collidepoint(mx, my):
+                            continue
+                        trigger = str(getattr(card, "ability_trigger", "") or "").strip().upper()
+                        if trigger not in {"ORDER", "ORDER_ZEAL"}:
+                            continue
+                        if network_mode:
+                            network_client.send(
+                                ORDER_CARD,
+                                {
+                                    "card_title": card.title,
+                                    "card_id": int(getattr(card, "network_id", 0) or 0),
+                                },
+                            )
+                            network_status = f"Activating ORDER: {card.title}..."
+                        elif game.try_order(card):
+                            game.debug(f"Input: RMB order {card.title}.")
                             _relayout(game)
                         break
 
@@ -531,7 +680,7 @@ def run_match(
                             game.debug(f"Input: drop-to-play {dragging_card.title}.")
                             if network_mode:
                                 network_client.send(
-                                    "play_card",
+                                    PLAY_CARD,
                                     {
                                         "card_title": dragging_card.title,
                                         "card_id": int(getattr(dragging_card, "network_id", 0) or 0),
@@ -594,6 +743,8 @@ def run_match(
                     _draw_card_back(screen, card.rect, fonts)
         if dragging_card is not None:
             dragging_card.draw(screen)
+        particle_system.update()
+        particle_system.draw(screen)
 
         if game.is_targeting_active():
             _draw_targeting_overlay(screen, game, fonts)
@@ -602,7 +753,7 @@ def run_match(
         end_turn_enabled = game.can_end_turn() and can_interact
         _draw_end_turn_button(screen, end_turn_rect, end_turn_enabled, fonts)
         if network_mode:
-            _draw_network_status(screen, fonts, my_role, can_interact and game.phase != Phase.GAME_OVER, network_status)
+            _draw_network_status(screen, fonts, my_role, bool(is_my_turn and game.phase != Phase.GAME_OVER), network_status)
         draw_close_button(screen, fonts, hovered=close_rect.collidepoint(mx, my))
 
         if dragging_card is None and game.phase != Phase.GAME_OVER and not game.is_targeting_active():

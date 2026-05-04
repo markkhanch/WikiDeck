@@ -3,6 +3,7 @@ from typing import Optional
 
 import pygame
 
+from data.settings_service import get_bool
 from config import (
     SCREEN_WIDTH,
     SCREEN_HEIGHT,
@@ -24,8 +25,11 @@ def draw_background(screen: pygame.Surface, background: Optional[pygame.Surface]
 
 
 def draw_title(screen: pygame.Surface, text: str, fonts: dict, y: int = 70) -> None:
-    t = pygame.time.get_ticks() / 1000.0
-    pulse = 0.6 + 0.4 * (0.5 + 0.5 * math.sin(t * 2.0))
+    if get_bool("display.animations"):
+        t = pygame.time.get_ticks() / 1000.0
+        pulse = 0.6 + 0.4 * (0.5 + 0.5 * math.sin(t * 2.0))
+    else:
+        pulse = 1.0
     color = (
         int(NEON_GREEN[0] * pulse),
         int(NEON_GREEN[1] * pulse),

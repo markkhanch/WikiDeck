@@ -6,7 +6,9 @@ always produces cards with theme ``LIVING``.
 
 from __future__ import annotations
 
+import json as _json
 import os
+import os as _os
 import random
 import re
 import sqlite3
@@ -23,7 +25,7 @@ try:
 except Exception:
     ollama = None
 
-from config import DB_PATH, OLLAMA_HOST, OLLAMA_MAX_RETRIES, OLLAMA_MODEL
+from config import DB_PATH
 from core.effects import Effect
 from data.card_contract import (
     normalize_nemesis,
@@ -33,6 +35,7 @@ from data.card_contract import (
 )
 from data.db import get_cached_card, get_fallback_cached_card, init_db, save_card
 from data.historical_people_pool import HISTORICAL_PERSONALITIES
+from data.settings_service import get_bool, get_float, get_int, get_str
 from data.wikipedia import get_article
 
 WIKI_SUMMARY_API = "https://en.wikipedia.org/api/rest_v1/page/summary/{}"
@@ -41,9 +44,6 @@ WIKI_PAGEVIEWS_API = (
     "en.wikipedia.org/all-access/user/{}/monthly/{}/{}"
 )
 HEADERS = {"User-Agent": "WikiDeck/2.0 (historical-cards)"}
-REQUEST_TIMEOUT = 10
-SUMMARY_MIN_CHARS = 120
-MAX_SUMMARY_CHARS = 400
 _OLLAMA_RUNTIME_AVAILABLE: Optional[bool] = None
 _OLLAMA_DOWN_NOTIFIED = False
 _OLLAMA_CLIENT = None
@@ -53,6 +53,46 @@ _OLLAMA_CHAT_LOCK = threading.Lock()
 
 def _log(message: str) -> None:
     print(message, flush=True)
+
+
+def _ollama_host_setting() -> str:
+    return get_str("ai.ollama_host")
+
+
+def _ollama_model_setting() -> str:
+    return get_str("ai.ollama_model")
+
+
+def _ollama_max_retries_setting() -> int:
+    return max(1, get_int("ai.ollama_max_retries"))
+
+
+def _request_timeout() -> int:
+    return max(1, get_int("ai.request_timeout"))
+
+
+def _summary_min_chars() -> int:
+    return max(1, get_int("ai.summary_min_chars"))
+
+
+def _summary_max_chars() -> int:
+    return max(_summary_min_chars(), get_int("ai.summary_max_chars"))
+
+
+_GWENT_EXAMPLES = None
+
+
+def _load_gwent_examples():
+    global _GWENT_EXAMPLES
+    if _GWENT_EXAMPLES is not None:
+        return _GWENT_EXAMPLES
+    path = _os.path.join(_os.path.dirname(__file__), "gwent_examples.json")
+    try:
+        with open(path) as f:
+            _GWENT_EXAMPLES = _json.load(f)
+    except Exception:
+        _GWENT_EXAMPLES = []
+    return _GWENT_EXAMPLES
 
 RARITY_WEIGHTS = {"COMMON": 70, "UNCOMMON": 20, "RARE": 8, "EPIC": 2, "LEGENDARY": 0}
 
@@ -64,40 +104,120 @@ RARITY_BUDGETS = {
     "LEGENDARY": 3.8,
 }
 
+RARITY_PROVISION = {
+    "COMMON": (4, 5),
+    "UNCOMMON": (6, 7),
+    "RARE": (8, 9),
+    "EPIC": (10, 11),
+    "LEGENDARY": (12, 14),
+}
+
+
+def _gwent_few_shot(rarity: str, n: int = 4) -> str:
+    examples = _load_gwent_examples()
+    prov_min, prov_max = RARITY_PROVISION.get(rarity, (4, 5))
+    matching = [
+        e
+        for e in examples
+        if prov_min <= e.get("provision", 0) <= prov_max
+        and e.get("power", 0) > 0
+        and 20 < len(e.get("ability", "")) < 150
+    ]
+    selected = matching[:n]
+    if not selected:
+        return ""
+    lines = [f"  - {e['ability']}" for e in selected]
+    return "\n".join(lines)
+
 HP_CAPS = {"COMMON": 4, "UNCOMMON": 5, "RARE": 6, "EPIC": 7, "LEGENDARY": 8}
 BASE_SCORE_CAPS = {"COMMON": 4, "UNCOMMON": 5, "RARE": 6, "EPIC": 7, "LEGENDARY": 8}
 MIN_STAT_FLOORS = {"COMMON": 2, "UNCOMMON": 2, "RARE": 3, "EPIC": 3, "LEGENDARY": 4}
 
 ABILITY_COSTS = {
     "DAMAGE": 1.4,
-    "EXECUTE": 1.8,
+    "DESTROY": 1.8,
+    "BANISH": 2.0,
+    "BOOST": 1.2,
     "HEAL": 1.1,
-    "APPLY_VIGOR": 1.1,
-    "APPLY_PLAGUE": 1.5,
-    "APPLY_DECAY": 1.4,
+    "DRAIN": 1.4,
+    "BLEEDING": 1.5,
+    "POISON": 1.6,
+    "VITALITY": 1.1,
+    "SHIELD": 1.2,
+    "IMMUNITY": 1.6,
+    "LOCK": 1.5,
+    "VEIL": 1.4,
+    "DOOMED": 1.0,
+    "DUEL": 1.8,
+    "CLASH": 1.7,
     "DRAW": 1.3,
-    "APPLY_FLOURISH": 1.2,
-    "REVIVE": 1.7,
-    "BRIBE": 1.5,
+    "DISCARD": 1.2,
     "GOLD": 1.2,
-    "APPLY_SHIELD": 1.2,
-    "APPLY_IMMUNITY": 1.6,
+    "REVIVE": 1.7,
+}
+
+VALID_EFFECTS = {
+    "DAMAGE",
+    "DESTROY",
+    "BANISH",
+    "BOOST",
+    "HEAL",
+    "DRAIN",
+    "BLEEDING",
+    "POISON",
+    "VITALITY",
+    "SHIELD",
+    "IMMUNITY",
+    "LOCK",
+    "VEIL",
+    "DOOMED",
+    "DUEL",
+    "CLASH",
+    "DRAW",
+    "DISCARD",
+    "GOLD",
+    "NONE",
+}
+
+VALID_TRIGGERS = {
+    "DEPLOY",
+    "ORDER",
+    "ORDER_ZEAL",
+    "DEATHWISH",
+    "DEATHBLOW",
+    "ON DEATH:ally",
+    "ON DEATH:enemy",
+    "END OF TURN",
+    "START OF TURN",
+    "TIMER",
+    "ADRENALINE",
+    "BLOODTHIRST",
+    "PASSIVE",
+    "NO ABILITY",
 }
 
 EFFECT_TYPE_TO_EFFECT = {
     "DAMAGE": Effect.DAMAGE_ENEMY_2,
-    "EXECUTE": Effect.DAMAGE_ENEMY_2,
+    "DESTROY": Effect.DAMAGE_ENEMY_2,
+    "BANISH": Effect.DAMAGE_ENEMY_2,
+    "BOOST": Effect.BUFF_SELF_1,
     "HEAL": Effect.HEAL_SELF_2,
-    "APPLY_VIGOR": Effect.BUFF_SELF_1,
-    "APPLY_PLAGUE": Effect.NONE,
-    "APPLY_DECAY": Effect.NONE,
+    "DRAIN": Effect.DAMAGE_ENEMY_2,
+    "BLEEDING": Effect.NONE,
+    "POISON": Effect.NONE,
+    "VITALITY": Effect.BUFF_SELF_1,
+    "SHIELD": Effect.HEAL_SELF_2,
+    "IMMUNITY": Effect.NONE,
+    "LOCK": Effect.NONE,
+    "VEIL": Effect.NONE,
+    "DOOMED": Effect.NONE,
+    "DUEL": Effect.DAMAGE_ENEMY_2,
+    "CLASH": Effect.DAMAGE_ENEMY_2,
     "DRAW": Effect.DRAW_1,
-    "APPLY_FLOURISH": Effect.BUFF_SELF_1,
+    "DISCARD": Effect.NONE,
     "REVIVE": Effect.NONE,
-    "BRIBE": Effect.NONE,
     "GOLD": Effect.DRAW_1,
-    "APPLY_SHIELD": Effect.HEAL_SELF_2,
-    "APPLY_IMMUNITY": Effect.NONE,
+    "NONE": Effect.NONE,
 }
 
 _KEYWORDS = {
@@ -206,7 +326,7 @@ _KEYWORDS = {
 
 
 def ollama_available() -> bool:
-    return ollama is not None
+    return bool(get_bool("ai.use_ollama") and ollama is not None)
 
 
 def _normalize_host(host: str) -> str:
@@ -219,7 +339,7 @@ def _normalize_host(host: str) -> str:
 
 
 def _host_candidates() -> list[str]:
-    candidates = [_normalize_host(OLLAMA_HOST), "http://127.0.0.1:11434", "http://localhost:11434"]
+    candidates = [_normalize_host(_ollama_host_setting()), "http://127.0.0.1:11434", "http://localhost:11434"]
     seen: set[str] = set()
     out: list[str] = []
     for host in candidates:
@@ -274,14 +394,14 @@ def _fetch_summary_from_api(title: str) -> Optional[str]:
     safe_title = title.replace(" ", "_")
     url = WIKI_SUMMARY_API.format(safe_title)
     try:
-        response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        response = requests.get(url, headers=HEADERS, timeout=_request_timeout())
         if response.status_code != 200:
             return None
         data = response.json()
         if data.get("type") == "disambiguation":
             return None
         extract = (data.get("extract") or "").strip()
-        if len(extract) < SUMMARY_MIN_CHARS:
+        if len(extract) < _summary_min_chars():
             return None
         return extract
     except Exception:
@@ -401,7 +521,7 @@ def get_monthly_views(title: str) -> int:
     end = last_of_prev_month.strftime("%Y%m%d00")
     url = WIKI_PAGEVIEWS_API.format(safe_title, start, end)
     try:
-        response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        response = requests.get(url, headers=HEADERS, timeout=_request_timeout())
         if response.status_code != 200:
             return 0
         data = response.json()
@@ -436,6 +556,18 @@ def _title_exists_in_cards(title: str) -> bool:
         return False
 
 
+def _extract_person_article_fields(article: dict | None) -> tuple[str, str] | None:
+    if not isinstance(article, dict):
+        return None
+    article_title = str(article.get("title", "")).strip()
+    extract = str(article.get("extract", "")).strip()
+    if not article_title or len(extract) < _summary_min_chars():
+        return None
+    if not _looks_like_person(article_title, extract):
+        return None
+    return article_title, extract
+
+
 def get_article_from_pool(
     diversity: Optional[dict] = None,
     pack_rarity: Optional[str] = None,
@@ -464,27 +596,31 @@ def get_article_from_pool(
         if _title_exists_in_cards(title):
             continue
         fallback = get_article(title)
-        if fallback and len(fallback[1].strip()) >= SUMMARY_MIN_CHARS and _looks_like_person(fallback[0], fallback[1]):
-            views = get_monthly_views(fallback[0])
+        extracted = _extract_person_article_fields(fallback)
+        if extracted is not None:
+            fallback_title, fallback_summary = extracted
+            views = get_monthly_views(fallback_title)
             rarity = assign_rarity_by_views(views)
             if pack_rarity is not None:
-                _log(f"  -> {fallback[0]} | views: {views:,}/month | pack rarity: {pack_rarity}")
+                _log(f"  -> {fallback_title} | views: {views:,}/month | pack rarity: {pack_rarity}")
             else:
                 _log(f"  -> Rarity: {rarity} ({views:,} views/month)")
-            return fallback[0], fallback[1].strip(), rarity
+            return fallback_title, fallback_summary, rarity
 
     # Pool may be exhausted (all titles already in cards). In that case,
     # gracefully allow a repeat instead of hard failing generation.
     for title in pool_copy:
         fallback = get_article(title)
-        if fallback and len(fallback[1].strip()) >= SUMMARY_MIN_CHARS and _looks_like_person(fallback[0], fallback[1]):
-            views = get_monthly_views(fallback[0])
+        extracted = _extract_person_article_fields(fallback)
+        if extracted is not None:
+            fallback_title, fallback_summary = extracted
+            views = get_monthly_views(fallback_title)
             rarity = assign_rarity_by_views(views)
             if pack_rarity is not None:
-                _log(f"  -> {fallback[0]} | views: {views:,}/month | pack rarity: {pack_rarity}")
+                _log(f"  -> {fallback_title} | views: {views:,}/month | pack rarity: {pack_rarity}")
             else:
                 _log(f"  -> Rarity: {rarity} ({views:,} views/month)")
-            return fallback[0], fallback[1].strip(), rarity
+            return fallback_title, fallback_summary, rarity
 
     raise RuntimeError("No valid historical titles available in pool.")
 
@@ -518,49 +654,43 @@ def _effect_candidates(hits: dict[str, int], theme: str = "LIVING") -> list[str]
     candidates: list[str] = []
 
     if hits.get("war", 0):
-        candidates.extend(["DAMAGE", "EXECUTE"])
+        candidates.extend(["DAMAGE", "DESTROY", "CLASH", "DUEL"])
     if hits.get("medicine", 0) or hits.get("disease", 0):
-        candidates.extend(["HEAL", "APPLY_VIGOR"])
+        candidates.extend(["HEAL", "VITALITY", "BLEEDING", "POISON"])
     if hits.get("assassin", 0) or hits.get("collapse", 0):
-        candidates.extend(["APPLY_PLAGUE", "APPLY_DECAY"])
+        candidates.extend(["BLEEDING", "POISON", "DESTROY"])
     if hits.get("education", 0):
-        candidates.extend(["DRAW", "APPLY_FLOURISH", "APPLY_VIGOR", "GOLD"])
+        candidates.extend(["DRAW", "BOOST", "VITALITY", "GOLD"])
     if hits.get("culture", 0):
-        candidates.extend(["APPLY_FLOURISH", "APPLY_VIGOR", "APPLY_SHIELD", "DRAW"])
+        candidates.extend(["BOOST", "VITALITY", "SHIELD", "DRAW"])
     if hits.get("religion", 0):
-        candidates.extend(["APPLY_FLOURISH", "REVIVE", "APPLY_VIGOR", "HEAL"])
+        candidates.extend(["BOOST", "REVIVE", "VITALITY", "HEAL"])
     if hits.get("politics", 0) or hits.get("economy", 0):
-        candidates.extend(["BRIBE", "GOLD"])
+        candidates.extend(["LOCK", "GOLD", "BANISH"])
     if hits.get("fortress", 0):
-        candidates.extend(["APPLY_SHIELD", "APPLY_IMMUNITY"])
+        candidates.extend(["SHIELD", "IMMUNITY", "VEIL"])
 
     if not candidates:
         if theme == "LIVING":
-            candidates = ["DRAW", "APPLY_FLOURISH", "APPLY_VIGOR", "HEAL", "GOLD", "APPLY_SHIELD"]
+            candidates = ["DRAW", "BOOST", "VITALITY", "HEAL", "GOLD", "SHIELD"]
         else:
-            candidates = ["APPLY_FLOURISH"]
+            candidates = ["BOOST"]
 
     unique: list[str] = []
     for effect in candidates:
         if effect not in unique:
             unique.append(effect)
-    return unique
+    return [effect for effect in unique if effect in VALID_EFFECTS]
 
 
 def _trigger_candidates(effect_type: str) -> list[str]:
-    if effect_type in {"DAMAGE", "EXECUTE", "APPLY_PLAGUE", "APPLY_DECAY", "BRIBE"}:
-        return ["ON PLAY"]
-    if effect_type in {"HEAL", "APPLY_VIGOR", "APPLY_SHIELD", "APPLY_IMMUNITY", "REVIVE"}:
-        triggers = ["ON PLAY", "ON DEATH:self"]
-        if effect_type in {"HEAL", "APPLY_VIGOR"}:
-            triggers.append("ON DEATH:ally")
-        return triggers
-    if effect_type in {"DRAW", "GOLD", "APPLY_FLOURISH"}:
-        triggers = ["ON PLAY", "ON DEATH:self"]
-        if effect_type in {"GOLD", "APPLY_FLOURISH"}:
-            triggers.append("ON DEATH:ally")
-        return triggers
-    return ["ON PLAY"]
+    if effect_type in {"DAMAGE", "DESTROY", "BANISH", "BLEEDING", "POISON", "LOCK", "DUEL", "CLASH"}:
+        return ["DEPLOY", "DEATHBLOW"]
+    if effect_type in {"HEAL", "BOOST", "VITALITY", "SHIELD", "IMMUNITY", "VEIL", "REVIVE"}:
+        return ["DEPLOY", "DEATHWISH", "ON DEATH:ally"]
+    if effect_type in {"DRAW", "DISCARD", "GOLD", "DRAIN"}:
+        return ["DEPLOY", "ORDER", "DEATHBLOW"]
+    return ["DEPLOY"]
 
 
 def _choose_with_diversity(
@@ -582,55 +712,67 @@ def _choose_with_diversity(
 
 
 def _ability_value(effect_type: str, rarity: str) -> int:
-    if effect_type in {"DAMAGE", "HEAL"}:
+    if effect_type in {"DAMAGE", "BOOST", "DRAIN", "BLEEDING", "VITALITY", "DRAW", "DISCARD", "GOLD"}:
         return 1 if rarity == "COMMON" else 2
-    if effect_type in {"DRAW", "GOLD"}:
-        return 1 if rarity in {"COMMON", "UNCOMMON"} else 2
-    if effect_type == "EXECUTE":
-        return 3
-    if effect_type == "APPLY_IMMUNITY":
-        return 1 if rarity in {"COMMON", "UNCOMMON"} else 2
+    if effect_type in {"POISON", "DESTROY", "BANISH", "HEAL", "SHIELD", "IMMUNITY", "LOCK", "VEIL", "DOOMED", "DUEL", "CLASH", "REVIVE", "NONE"}:
+        return 0
     return 0
 
 
 def _ability_text_template(effect_type: str, value: int) -> str:
     if effect_type == "DAMAGE":
         return f"Deal {value} damage to one enemy card."
-    if effect_type == "EXECUTE":
-        return f"Destroy one enemy card with {value} or fewer HP."
+    if effect_type == "DESTROY":
+        return "Destroy one enemy card."
+    if effect_type == "BANISH":
+        return "Banish one enemy card."
+    if effect_type == "BOOST":
+        return f"Boost self by {value}."
     if effect_type == "HEAL":
-        return f"Restore {value} HP to one friendly card."
-    if effect_type == "APPLY_VIGOR":
-        return "Apply VIGOR to one friendly card."
-    if effect_type == "APPLY_PLAGUE":
-        return "Apply PLAGUE to one enemy card."
-    if effect_type == "APPLY_DECAY":
-        return "Apply DECAY to one enemy card."
+        return "Heal this card."
+    if effect_type == "DRAIN":
+        return f"Drain {value} from an enemy card."
+    if effect_type == "BLEEDING":
+        return f"Give an enemy card Bleeding for {value} turns."
+    if effect_type == "POISON":
+        return "Give an enemy card Poison."
+    if effect_type == "VITALITY":
+        return f"Give this card Vitality for {value} turns."
+    if effect_type == "SHIELD":
+        return "Give this card Shield."
+    if effect_type == "IMMUNITY":
+        return "Give this card Immunity."
+    if effect_type == "LOCK":
+        return "Lock an enemy card."
+    if effect_type == "VEIL":
+        return "Give this card Veil."
+    if effect_type == "DUEL":
+        return "Duel an enemy card."
+    if effect_type == "CLASH":
+        return "Clash with one enemy card."
     if effect_type == "DRAW":
         return f"Draw {value} cards."
-    if effect_type == "APPLY_FLOURISH":
-        return "Apply FLOURISH to one friendly card."
+    if effect_type == "DISCARD":
+        return f"Discard {value} cards from the enemy hand."
     if effect_type == "REVIVE":
         return "Return one card from your discard pile to the field."
-    if effect_type == "BRIBE":
-        return "Disable one enemy card ability for 1 turn."
     if effect_type == "GOLD":
         return f"Gain {value} gold."
-    if effect_type == "APPLY_SHIELD":
-        return "Apply SHIELD to this card."
-    if effect_type == "APPLY_IMMUNITY":
-        return "Apply IMMUNITY to this card."
-    return "Apply FLOURISH to one friendly card."
+    return "Boost self by 1."
 
 
 def _with_trigger_context(trigger: str, ability_text: str) -> str:
     stripped = ability_text.strip()
-    if trigger == "ON DEATH:self":
-        body = stripped[0].lower() + stripped[1:] if stripped else stripped
-        return f"When this card dies, {body}"
-    if trigger == "ON DEATH:ally":
-        body = stripped[0].lower() + stripped[1:] if stripped else stripped
-        return f"When an ally dies, {body}"
+    if trigger == "ORDER":
+        return f"Order: {stripped}"
+    if trigger == "ORDER_ZEAL":
+        return f"Order: {stripped}"
+    if trigger == "DEATHWISH":
+        return f"Deathwish: {stripped}"
+    if trigger == "DEATHBLOW":
+        return f"Deathblow: {stripped}"
+    if trigger == "TIMER":
+        return f"Timer 2: {stripped}"
     return stripped
 
 
@@ -676,7 +818,7 @@ def build_grounded_spec(
         "nemesis": None,
         "source_type": "WIKIPEDIA",
         "source_ref": title,
-        "summary_snippet": summary[:MAX_SUMMARY_CHARS],
+        "summary_snippet": summary[:_summary_max_chars()],
     }
 
 
@@ -690,38 +832,52 @@ def build_system_prompt() -> str:
         "- Under 20 words\n"
         "- Must contain ONLY mechanic and target (no explanations, no flavor)\n"
         "- One verb, one target, period\n"
-        "- Only use these game terms: HP, Score, PLAGUE, VIGOR, DECAY,\n"
-        "  FLOURISH, SHIELD, IMMUNITY, gold, cards\n"
+        "- Only use these game terms: HP, Score, BLEEDING, VITALITY, POISON,\n"
+        "  SHIELD, IMMUNITY, LOCK, VEIL, BOOST, gold, cards\n"
         "FORBIDDEN words - never use these in ability_text:\n"
         "attack, defense, morale, faith, influence, power, strength, mana\n"
-        "- If trigger is ON DEATH:self, ability_text MUST start with:\n"
-        '  "When this card dies, ..."\n'
-        "- If trigger is ON DEATH:ally, ability_text MUST start with:\n"
-        '  "When an ally dies, ..."\n'
+        "- If trigger is DEATHWISH, ability_text MUST start with: \"Deathwish: ...\"\n"
+        "- If trigger is DEATHBLOW, ability_text MUST start with: \"Deathblow: ...\"\n"
+        "- If trigger is ORDER or ORDER_ZEAL, ability_text MUST start with: \"Order: ...\"\n"
         "- Never write card names in ability_text (forbidden: 'When Frida Kahlo dies, ...')\n"
         "- For all other triggers, do not include trigger words in ability_text\n"
         "- One effect only - never combine two effects in one sentence\n"
         "- Complete sentence with a period\n\n"
-        "Wrong format examples:\n"
-        '- "On death, apply VIGOR to all friendly cards."\n'
-        '- "On death, self -> REVIVE."\n'
-        '- "Apply SHIELD representing defense in the realm of music."\n\n'
-        '- "Apply SHIELD representing strategic defense."\n'
-        '- "Deal 2 damage through military power."\n'
-        '- "Gain 1 gold through political influence."\n\n'
-        "Correct format examples:\n"
-        '- "Apply VIGOR to all friendly cards."\n'
-        '- "When an ally dies, apply FLOURISH to all friendly cards."\n'
-        '- "Apply SHIELD to this card."\n'
-        '- "Apply PLAGUE to all enemy cards."\n'
-        '- "Apply DECAY to one enemy card."\n'
+        "DEPLOY examples:\n"
         '- "Deal 2 damage to one enemy card."\n'
-        '- "Return one card from your discard pile to the field."\n'
-        '- "Destroy one enemy card with 3 or fewer HP."\n'
-        '- "Gain 1 gold."\n\n'
-        "EXECUTE rule:\n"
-        "- ability_value must exactly equal the number in ability_text\n"
-        "- For EXECUTE, ability_value cannot be 0\n\n"
+        '- "Boost self by 2."\n'
+        '- "Drain 2 from an enemy card."\n'
+        '- "Give an enemy card Bleeding for 3 turns."\n'
+        '- "Give this card Immunity."\n'
+        '- "Give this card Shield."\n'
+        '- "Lock an enemy card."\n'
+        '- "Destroy one enemy card."\n'
+        '- "Banish one enemy card."\n'
+        '- "Give an enemy card Poison."\n'
+        '- "Duel an enemy card."\n'
+        '- "Draw 1 card."\n'
+        '- "Gain 2 gold."\n\n'
+        "ORDER examples (can be used once per turn):\n"
+        '- "Order: Deal 3 damage to one enemy card."\n'
+        '- "Order: Boost an allied card by 2."\n'
+        '- "Order: Heal this card."\n\n'
+        "DEATHWISH examples (trigger on this card's death):\n"
+        '- "Deathwish: Boost all allied cards by 1."\n'
+        '- "Deathwish: Draw 2 cards."\n'
+        '- "Deathwish: Deal 2 damage to all enemy cards."\n\n'
+        "DEATHBLOW examples (trigger when this card destroys another):\n"
+        '- "Deathblow: Gain 2 gold."\n'
+        '- "Deathblow: Boost self by 3."\n'
+        '- "Deathblow: Draw 1 card."\n\n'
+        "TIMER examples:\n"
+        '- "Timer 3: Destroy the highest-HP enemy card."\n'
+        '- "Timer 2: Boost self by 4."\n\n'
+        "BLEEDING examples:\n"
+        '- "Give an enemy card Bleeding for 2 turns."\n\n'
+        "WRONG:\n"
+        '- "Deal 2 damage and draw 1 card."\n'
+        '- "Order Boost self by 2."\n'
+        '- "When deployed, deal 2 damage."\n\n'
         "Rules for nemesis:\n"
         "- A real Wikipedia article title of a historical rival or opponent\n"
         "- Must be someone this person actually opposed in real history\n"
@@ -737,27 +893,41 @@ def build_system_prompt() -> str:
 
 
 def build_user_prompt(spec: dict, summary: str) -> str:
-    return (
-        f"Person: {spec['title']}\n"
-        f"Required title echo: {spec['title']}\n"
-        f"Summary: {summary[:MAX_SUMMARY_CHARS]}\n"
-        f"Epoch: {spec['epoch']}\n"
-        f"Mechanic: {spec['trigger']} -> {spec['effect_type']}\n"
-        f"REQUIRED effect in ability_text: {spec['effect_type']}\n"
-        f"Ability value: {spec['ability_value']}\n\n"
-        "Examples of correct ability_text for different mechanics:\n"
-        'DAMAGE: "Deal 2 damage to one enemy card."\n'
-        'APPLY_PLAGUE: "Apply PLAGUE to all enemy cards."\n'
-        'APPLY_FLOURISH: "Apply FLOURISH to all friendly cards."\n'
-        'HEAL: "Restore 2 HP to one friendly card."\n'
-        'DRAW: "Draw 2 cards."\n'
-        'GOLD: "Gain 2 gold."\n'
-        'EXECUTE: "Destroy one enemy card with 3 or fewer HP."\n'
-        'APPLY_SHIELD: "Apply SHIELD to this card."\n'
-        'BRIBE: "Disable one enemy card ability for 1 turn."\n'
-        'REVIVE: "Return one card from your discard pile to the field."\n'
-        'ON DEATH:ally context: "When an ally dies, apply FLOURISH to all friendly cards."'
-    )
+    rarity = str(spec.get("rarity", "COMMON")).upper()
+    few_shot = _gwent_few_shot(rarity)
+    few_shot_block = ""
+    if few_shot:
+        few_shot_block = f"""
+Ability complexity reference for {rarity} cards (from a balanced card game):
+{few_shot}
+Use these as inspiration for complexity level only - do NOT copy them literally.
+Write ability_text using only WikiDeck terms: HP, Score, BLEEDING, VITALITY,
+POISON, SHIELD, IMMUNITY, LOCK, VEIL, BOOST, gold, cards.
+"""
+
+    return f"""Person: {spec['title']}
+Required title echo: {spec['title']}
+Summary: {summary[:_summary_max_chars()]}
+Epoch: {spec['epoch']}
+Mechanic: {spec['trigger']} -> {spec['effect_type']}
+REQUIRED effect in ability_text: {spec['effect_type']}
+Ability value: {spec['ability_value']}
+
+Examples of correct ability_text for different mechanics:
+DAMAGE: "Deal 2 damage to one enemy card."
+BOOST: "Boost self by 2."
+DRAIN: "Drain 2 from an enemy card."
+BLEEDING: "Give an enemy card Bleeding for 3 turns."
+HEAL: "Heal this card."
+DRAW: "Draw 2 cards."
+GOLD: "Gain 2 gold."
+DESTROY: "Destroy one enemy card."
+BANISH: "Banish one enemy card."
+SHIELD: "Give this card Shield."
+LOCK: "Lock an enemy card."
+REVIVE: "Return one card from your discard pile to the field."
+DEATHWISH context: "Deathwish: Boost all allied cards by 1."
+{few_shot_block}"""
 
 
 def _parse_flavor_response(raw_text: str) -> dict:
@@ -798,10 +968,12 @@ def _validate_spec(spec: dict) -> tuple[bool, list[str]]:
 
         if title_low and title_low in low:
             raise ValueError("ability_text must not contain card name")
-        if trigger == "ON DEATH:self" and not low.startswith("when this card dies,"):
-            raise ValueError("ON DEATH:self ability_text must start with 'When this card dies,'")
-        if trigger == "ON DEATH:ally" and not low.startswith("when an ally dies,"):
-            raise ValueError("ON DEATH:ally ability_text must start with 'When an ally dies,'")
+        if trigger == "DEATHWISH" and not low.startswith("deathwish:"):
+            raise ValueError("DEATHWISH ability_text must start with 'Deathwish:'")
+        if trigger == "DEATHBLOW" and not low.startswith("deathblow:"):
+            raise ValueError("DEATHBLOW ability_text must start with 'Deathblow:'")
+        if trigger in {"ORDER", "ORDER_ZEAL"} and not low.startswith("order:"):
+            raise ValueError("ORDER/ORDER_ZEAL ability_text must start with 'Order:'")
         return True, []
     except Exception as exc:
         return False, [str(exc)]
@@ -815,6 +987,8 @@ def _generate_flavor(spec: dict, summary: str, retries: int = 4) -> dict:
         "ability_text": spec["ability_text"],
         "nemesis": None,
     }
+    if not get_bool("ai.use_ollama"):
+        return fallback
     if ollama is None:
         print(f"[ai] ollama unavailable, fallback used for {spec['title']}", flush=True)
         return fallback
@@ -834,9 +1008,9 @@ def _generate_flavor(spec: dict, summary: str, retries: int = 4) -> dict:
             user_prompt += f"\n\nPrevious issues to fix:\n{error_lines}"
         try:
             chat_payload = {
-                "model": OLLAMA_MODEL,
+                "model": _ollama_model_setting(),
                 "format": "json",
-                "options": {"temperature": 0},
+                "options": {"temperature": get_float("ai.temperature")},
                 "messages": [
                     {"role": "system", "content": build_system_prompt()},
                     {"role": "user", "content": user_prompt},
@@ -882,14 +1056,15 @@ def _generate_flavor(spec: dict, summary: str, retries: int = 4) -> dict:
             msg = str(exc)
             if "Failed to connect to Ollama" in msg or "Connection refused" in msg:
                 reconnected = False
-                for reconnect_try in range(max(1, OLLAMA_MAX_RETRIES)):
+                retries = _ollama_max_retries_setting()
+                for reconnect_try in range(retries):
                     with _OLLAMA_CHAT_LOCK:
                         ok = _ensure_ollama_runtime()
                     if ok:
                         reconnected = True
                         _OLLAMA_RUNTIME_AVAILABLE = True
                         _OLLAMA_DOWN_NOTIFIED = False
-                        print(f"[ai] reconnect success ({reconnect_try + 1}/{max(1, OLLAMA_MAX_RETRIES)})", flush=True)
+                        print(f"[ai] reconnect success ({reconnect_try + 1}/{retries})", flush=True)
                         break
                     time.sleep(0.4)
                 if reconnected:
@@ -916,10 +1091,10 @@ def _balance_card(spec: dict) -> dict:
     value = int(spec.get("ability_value", 0) or 0)
     cost = ABILITY_COSTS.get(effect_type, 1.0)
 
-    trigger = spec.get("trigger", "ON PLAY")
-    if trigger.startswith("ON DEATH"):
+    trigger = spec.get("trigger", "DEPLOY")
+    if trigger in {"DEATHWISH", "DEATHBLOW", "ON DEATH:ally", "ON DEATH:enemy"}:
         cost += 0.2
-    elif trigger == "PASSIVE":
+    elif trigger in {"PASSIVE", "ORDER", "ORDER_ZEAL"}:
         cost += 0.3
 
     hp = max(floor, min(HP_CAPS.get(rarity, 5), round(1.2 + budget - 0.6 * cost)))
@@ -1107,9 +1282,11 @@ def effects_from_spec(
 
     _ = ability_value
     effect = EFFECT_TYPE_TO_EFFECT.get(effect_type, Effect.NONE)
-    if trigger_type == "ON PLAY":
+    trigger_norm = str(trigger_type or "NO ABILITY").strip().upper()
+
+    if trigger_norm == "DEPLOY":
         return effect, Effect.NONE
-    if trigger_type.startswith("ON DEATH"):
+    if trigger_norm.startswith("ON DEATH") or trigger_norm in {"DEATHWISH", "DEATHBLOW"}:
         return Effect.NONE, effect
     return Effect.NONE, Effect.NONE
 

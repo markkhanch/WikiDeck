@@ -1,9 +1,10 @@
 import pygame
 
-from config import SCREEN_WIDTH, SCREEN_HEIGHT, CARD_WIDTH, CARD_HEIGHT, MUTED_TEXT, GOLD, DECK_MIN, DECK_MAX
+from config import SCREEN_WIDTH, SCREEN_HEIGHT, CARD_WIDTH, CARD_HEIGHT, MUTED_TEXT, GOLD
 from core.card import Card
 from core.card_factory import build_card_from_spec
 from data.db import add_to_deck, deck_size, get_cached_card, get_collection, get_deck_cards, set_deck_count
+from data.settings_service import get_int, target_fps
 from ui.components.hover_panel import draw_hover_panel
 from ui.screens.common import (
     draw_background,
@@ -50,9 +51,11 @@ def run_deck_builder(
     right_cards: list[tuple[Card, dict]] = []
 
     while True:
-        clock.tick(60)
+        clock.tick(target_fps())
         mx, my = pygame.mouse.get_pos()
         close_rect = close_button_rect()
+        deck_min = get_int("gameplay.deck_min")
+        deck_max = get_int("gameplay.deck_max")
         click_pos = None
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -147,7 +150,7 @@ def run_deck_builder(
             for rect, entry in left_clickables:
                 if rect.collidepoint(cx, cy):
                     total = deck_size()
-                    if total < DECK_MAX:
+                    if total < deck_max:
                         owned = coll_map.get((entry["title"], entry["rarity"]), 0)
                         in_deck = deck_map.get((entry["title"], entry["rarity"]), 0)
                         if in_deck < owned:
@@ -160,11 +163,11 @@ def run_deck_builder(
 
         total = deck_size()
         warn = ""
-        if total < DECK_MIN:
-            warn = f"Deck too small: {total}/{DECK_MIN}"
-        elif total > DECK_MAX:
-            warn = f"Deck too large: {total}/{DECK_MAX}"
-        stats = fonts["small"].render(f"Cards: {total} (min {DECK_MIN}, max {DECK_MAX})", True, MUTED_TEXT)
+        if total < deck_min:
+            warn = f"Deck too small: {total}/{deck_min}"
+        elif total > deck_max:
+            warn = f"Deck too large: {total}/{deck_max}"
+        stats = fonts["small"].render(f"Cards: {total} (min {deck_min}, max {deck_max})", True, MUTED_TEXT)
         screen.blit(stats, (stats_rect.x + 10, stats_rect.y + 30))
         if warn:
             warn_surf = fonts["small"].render(warn, True, GOLD)

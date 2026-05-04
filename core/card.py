@@ -91,15 +91,19 @@ class Card:
     base_score: int = 3
     theme: str = "CONCEPTS"
     rarity: str = "COMMON"
+    epoch: str = "TIMELESS"
+    nemesis: Optional[str] = None
     description: str = ""   # short Wikipedia subtitle (~1 line)
     extract: str = ""       # first paragraph of the article (~500 chars)
     image: Optional[pygame.Surface] = None
     ability_text: str = ""  # AI-authored ability description (optional)
     ability_trigger: str = ""  # Raw trigger label from generator (optional)
+    trigger_value: int = 0
     effect_type: str = "NONE"
     ability_value: int = 0
     max_hp: int = 0
-    statuses: set[str] = field(default_factory=set)
+    graveyard_eligible: bool = False
+    statuses: dict[str, int | bool] = field(default_factory=dict)
     silenced_turns: int = 0
     on_play:  Effect = Effect.NONE
     on_death: Effect = Effect.NONE
@@ -112,9 +116,29 @@ class Card:
         if self.max_hp <= 0:
             self.max_hp = max(1, int(self.hp))
         if isinstance(self.statuses, list):
-            self.statuses = set(self.statuses)
-        elif not isinstance(self.statuses, set):
-            self.statuses = set()
+            self.statuses = {str(name).upper(): 1 for name in self.statuses}
+        elif isinstance(self.statuses, set):
+            self.statuses = {str(name).upper(): 1 for name in self.statuses}
+        elif isinstance(self.statuses, dict):
+            normalized: dict[str, int | bool] = {}
+            for raw_name, raw_value in self.statuses.items():
+                name = str(raw_name).upper()
+                if isinstance(raw_value, bool):
+                    if raw_value:
+                        normalized[name] = True
+                else:
+                    try:
+                        value = int(raw_value)
+                    except Exception:
+                        value = 1
+                    if value > 0:
+                        normalized[name] = value
+            self.statuses = normalized
+        else:
+            self.statuses = {}
+        if isinstance(self.nemesis, str):
+            trimmed = self.nemesis.strip()
+            self.nemesis = trimmed or None
 
     # ---- placement helpers ----
     def set_center(self, x: float, y: float) -> None:
@@ -176,7 +200,17 @@ class Card:
         hp_surf = font_stat.render(f"HP {self.hp}", True, NEON_RED)
         bs_surf = font_stat.render(f"SC {self.base_score}", True, NEON_GREEN)
         stat_y = y + CARD_HEIGHT - 22
-        status_labels = sorted(self.statuses)
+        status_labels: list[str] = []
+        for name in sorted(self.statuses):
+            value = self.statuses[name]
+            if isinstance(value, bool):
+                if value:
+                    status_labels.append(name)
+                continue
+            if int(value) > 1:
+                status_labels.append(f"{name}:{int(value)}")
+            elif int(value) == 1:
+                status_labels.append(name)
         if self.silenced_turns > 0:
             status_labels.append(f"SIL:{self.silenced_turns}")
         if status_labels:

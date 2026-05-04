@@ -23,10 +23,18 @@ CARD_IMAGES_DIR = os.path.join(ASSETS_DIR, "card_images")
 # ---- Ollama (AI card generation) ----
 USE_OLLAMA_GENERATOR = os.getenv("WIKIDECK_USE_OLLAMA", "1") == "1"
 GENERATOR_V2 = os.getenv("WIKIDECK_GENERATOR_V2", "1") == "1"
-OLLAMA_HOST = os.getenv("WIKIDECK_OLLAMA_HOST", "http://127.0.0.1:11434")
+_OLLAMA_HOST_LOCAL_FILE = os.path.join(_ROOT, ".ollama_host")
+_OLLAMA_HOST_LOCAL = ""
+if os.path.isfile(_OLLAMA_HOST_LOCAL_FILE):
+    try:
+        with open(_OLLAMA_HOST_LOCAL_FILE, "r", encoding="utf-8") as _f:
+            _OLLAMA_HOST_LOCAL = _f.read().strip()
+    except OSError:
+        _OLLAMA_HOST_LOCAL = ""
+OLLAMA_HOST = os.getenv("WIKIDECK_OLLAMA_HOST", _OLLAMA_HOST_LOCAL or "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.getenv(
     "WIKIDECK_OLLAMA_MODEL",
-    "hf.co/bartowski/Qwen2.5-Coder-14B-Instruct-abliterated-GGUF:Q8_0",
+    "qwen2.5-coder:14b",
 )
 OLLAMA_MAX_RETRIES = int(os.getenv("WIKIDECK_OLLAMA_MAX_RETRIES", "3"))
 

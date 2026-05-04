@@ -18,30 +18,24 @@ from data.db import (
     save_card,
 )
 from data.ollama_gen import apply_diversity, generate_card_spec, get_article_from_pool
+from data.settings_schema import (
+    PACK_ORDER,
+    PACK_TYPES_DEFAULT,
+    RARITIES,
+    SINGLE_PRICES_DEFAULT,
+    SINGLE_RARITY_WEIGHTS_DEFAULT,
+)
+from data.settings_service import get_int
 
 PACK_READY_SECONDS = 0.0
 
 PACK_TYPES: dict[str, dict[str, Any]] = {
-    "basic": {
-        "price": 50,
-        "size": 5,
-        "weights": {"COMMON": 60, "UNCOMMON": 30, "RARE": 8, "EPIC": 2, "LEGENDARY": 0},
-    },
-    "premium": {
-        "price": 150,
-        "size": 5,
-        "weights": {"COMMON": 30, "UNCOMMON": 35, "RARE": 25, "EPIC": 8, "LEGENDARY": 2},
-    },
-    "epic": {
-        "price": 300,
-        "size": 5,
-        "weights": {"COMMON": 10, "UNCOMMON": 20, "RARE": 35, "EPIC": 30, "LEGENDARY": 5},
-    },
-    "legendary": {
-        "price": 600,
-        "size": 5,
-        "weights": {"COMMON": 0, "UNCOMMON": 5, "RARE": 20, "EPIC": 40, "LEGENDARY": 35},
-    },
+    key: {
+        "price": int(value["price"]),
+        "size": int(value["size"]),
+        "weights": dict(value["weights"]),
+    }
+    for key, value in PACK_TYPES_DEFAULT.items()
 }
 
 PACK_DISPLAY_NAMES = {
@@ -51,15 +45,8 @@ PACK_DISPLAY_NAMES = {
     "legendary": "Legendary Pack",
 }
 
-SINGLE_PRICES = {
-    "COMMON": 30,
-    "UNCOMMON": 75,
-    "RARE": 150,
-    "EPIC": 400,
-    "LEGENDARY": 1000,
-}
-
-SINGLE_RARITY_WEIGHTS = {"COMMON": 55, "UNCOMMON": 25, "RARE": 13, "EPIC": 6, "LEGENDARY": 1}
+SINGLE_PRICES = dict(SINGLE_PRICES_DEFAULT)
+SINGLE_RARITY_WEIGHTS = dict(SINGLE_RARITY_WEIGHTS_DEFAULT)
 _GENERATION_LOCK = threading.Lock()
 
 
@@ -98,8 +85,41 @@ def _ensure_shop_tables() -> None:
         conn.commit()
 
 
+def get_pack_types() -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for pack in PACK_ORDER:
+        defaults = PACK_TYPES_DEFAULT[pack]
+        weights: dict[str, int] = {}
+        for rarity in RARITIES:
+            weights[rarity] = get_int(f"shop.pack.{pack}.weight.{rarity.lower()}")
+        out[pack] = {
+            "price": get_int(f"shop.pack.{pack}.price"),
+            "size": get_int(f"shop.pack.{pack}.size"),
+            "weights": weights,
+        }
+        if sum(weights.values()) <= 0:
+            out[pack]["weights"] = dict(defaults["weights"])
+    return out
+
+
+def get_single_prices() -> dict[str, int]:
+    return {rarity: get_int(f"shop.single.price.{rarity.lower()}") for rarity in RARITIES}
+
+
+def get_single_rarity_weights() -> dict[str, int]:
+    out = {rarity: get_int(f"shop.single.weight.{rarity.lower()}") for rarity in RARITIES}
+    if sum(out.values()) <= 0:
+        return dict(SINGLE_RARITY_WEIGHTS_DEFAULT)
+    return out
+
+
+def _deck_target() -> int:
+    return get_int("gameplay.deck_target")
+
+
 def pick_rarity_weighted(pack_type: str) -> str:
-    weights = PACK_TYPES[pack_type]["weights"]
+    pack_types = get_pack_types()
+    weights = pack_types[pack_type]["weights"]
     rarities = list(weights.keys())
     w = list(weights.values())
     return random.choices(rarities, weights=w, k=1)[0]
@@ -127,10 +147,11 @@ def _save_pending_cards(pack_id: int, cards: list[dict], status: str = "generati
 
 
 def _generate_pack_cards(pack_type: str, on_progress=None, pack_size: int | None = None) -> list[dict]:
-    if pack_type not in PACK_TYPES:
+    pack_types = get_pack_types()
+    if pack_type not in pack_types:
         raise ValueError(f"Unknown pack type: {pack_type}")
 
-    pack_size = int(pack_size or PACK_TYPES[pack_type]["size"])
+    pack_size = int(pack_size or pack_types[pack_type]["size"])
     cards: list[dict] = []
     used_source_titles: set[str] = set()
     used_card_titles: set[str] = set()
@@ -178,11 +199,11 @@ def _generate_in_background(pack_id: int, pack_type: str) -> None:
         _save_pending_cards(pack_id, cards, status="ready")
     except Exception as exc:
         print(f"[shop] pack #{pack_id} generation failed: {exc}", flush=True)
-        _save_pending_cards(pack_id, cards, status="ready" if cards else "generating")
+        _save_pending_cards(pack_id, cards, status="ready" if cards else "error")
 
 
 def purchase_pack(pack_type: str) -> int:
-    if pack_type not in PACK_TYPES:
+    if pack_type not in get_pack_types():
         raise ValueError(f"Unknown pack type: {pack_type}")
 
     _ensure_shop_tables()
@@ -209,6 +230,7 @@ def purchase_pack(pack_type: str) -> int:
 
 
 def get_pending_packs() -> list[dict]:
+    pack_types = get_pack_types()
     _ensure_shop_tables()
     with _connect() as conn:
         rows = conn.execute(
@@ -224,9 +246,9 @@ def get_pending_packs() -> list[dict]:
     for row in rows:
         cards = _safe_load_cards(row["cards_json"])
         pack_type = str(row["pack_type"])
-        pack_size = int(PACK_TYPES.get(pack_type, {"size": 5})["size"])
+        pack_size = int(pack_types.get(pack_type, {"size": 5})["size"])
         ready_at = float(row["ready_at"])
-        is_ready_for_open = row["status"] == "ready"
+        is_ready_for_open = row["status"] == "ready" and bool(cards)
         result.append(
             {
                 "id": int(row["id"]),
@@ -276,8 +298,9 @@ def open_pack(pack_id: int) -> list[dict] | None:
 
 
 def _pick_single_rarity() -> str:
-    rarities = list(SINGLE_RARITY_WEIGHTS.keys())
-    weights = list(SINGLE_RARITY_WEIGHTS.values())
+    single_weights = get_single_rarity_weights()
+    rarities = list(single_weights.keys())
+    weights = list(single_weights.values())
     return random.choices(rarities, weights=weights, k=1)[0]
 
 
@@ -289,8 +312,9 @@ def _generate_single_spec() -> dict:
 
 
 def _insert_single(spec: dict) -> None:
+    single_prices = get_single_prices()
     rarity = str(spec.get("rarity", "COMMON")).upper()
-    price = int(SINGLE_PRICES.get(rarity, SINGLE_PRICES["COMMON"]))
+    price = int(single_prices.get(rarity, single_prices["COMMON"]))
     with _connect() as conn:
         conn.execute(
             """
@@ -317,8 +341,12 @@ def ensure_shop_singles(min_count: int = 2) -> None:
         current = int(conn.execute("SELECT COUNT(*) FROM shop_singles").fetchone()[0])
     missing = max(0, min_count - current)
     for _ in range(missing):
-        spec = _generate_single_spec()
-        _insert_single(spec)
+        try:
+            spec = _generate_single_spec()
+            _insert_single(spec)
+        except Exception as exc:
+            print(f"[shop] ensure singles failed: {exc}", flush=True)
+            break
 
 
 def get_shop_singles() -> list[dict]:
@@ -370,7 +398,7 @@ def buy_single_card(single_id: int) -> dict | None:
     title = str(row["card_title"])
     rarity = str(row["card_rarity"])
     add_to_collection(title, rarity, 1)
-    if deck_size() < 20:
+    if deck_size() < _deck_target():
         add_to_deck(title, rarity, 1)
 
     threading.Thread(target=_generate_single_in_background, daemon=True).start()
@@ -386,9 +414,10 @@ def open_random_pack(pack_size: int = 5, on_progress=None) -> list[dict]:
     return _generate_pack_cards("basic", on_progress=_progress, pack_size=pack_size)
 
 
-def add_pack_to_collection_and_deck(cards: list[dict], auto_fill_target: int = 20) -> None:
+def add_pack_to_collection_and_deck(cards: list[dict], auto_fill_target: int | None = None) -> None:
     if not cards:
         return
+    target = int(_deck_target() if auto_fill_target is None else auto_fill_target)
 
     for spec in cards:
         save_card(spec)
@@ -396,10 +425,10 @@ def add_pack_to_collection_and_deck(cards: list[dict], auto_fill_target: int = 2
         rarity = spec["rarity"]
         add_to_collection(title, rarity, 1)
 
-    if deck_size() >= auto_fill_target:
+    if deck_size() >= target:
         return
 
     for spec in cards:
-        if deck_size() >= auto_fill_target:
+        if deck_size() >= target:
             break
         add_to_deck(spec["title"], spec["rarity"], 1)

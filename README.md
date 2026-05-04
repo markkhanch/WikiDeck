@@ -23,6 +23,12 @@ Active development. Everything is subject to change.
 2. (Optional) Set custom Ollama endpoint:
    `export WIKIDECK_OLLAMA_HOST=http://127.0.0.1:11434`
 
+## Settings
+
+- Open **Settings** from the main menu to configure gameplay, AI/Ollama, shop economy, networking, and debug flags.
+- Settings are persisted in SQLite (`data/wikideck.db`, table `app_settings`).
+- Environment variables in `config.py` are used as initial defaults; after first launch, in-game settings become the source of truth.
+
 ## Tech Stack
 
 - Python + Pygame — game engine and UI

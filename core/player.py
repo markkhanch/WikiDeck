@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 from core.card import Card
-from config import FIELD_LIMIT
+from data.settings_service import get_int
 
 
 @dataclass
@@ -18,6 +18,7 @@ class Player:
     on_field: List[Card] = field(default_factory=list)
     discard:  List[Card] = field(default_factory=list)
     gold: int = 0
+    kills: int = 0
 
     # ---- deck operations ----
     def draw_card(self) -> Optional[Card]:
@@ -38,7 +39,7 @@ class Player:
         """Move card from hand to field. Returns False if not allowed."""
         if card not in self.hand:
             return False
-        if len(self.on_field) >= FIELD_LIMIT:
+        if len(self.on_field) >= get_int("gameplay.field_limit"):
             return False
         self.hand.remove(card)
         self.on_field.append(card)
@@ -48,5 +49,6 @@ class Player:
         if card not in self.hand:
             return False
         self.hand.remove(card)
+        card.graveyard_eligible = False
         self.discard.append(card)
         return True

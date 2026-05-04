@@ -1,6 +1,7 @@
 import pygame
 
 from config import SCREEN_WIDTH, SCREEN_HEIGHT, MUTED_TEXT, GOLD, NEON_BLUE, BG_MID
+from data.settings_service import target_fps
 from ui.screens.common import (
     draw_background,
     draw_title,
@@ -23,7 +24,7 @@ def run_profile(
     history_rect = pygame.Rect(pad, info_rect.bottom + 16, SCREEN_WIDTH - pad * 2, 220)
 
     while True:
-        clock.tick(60)
+        clock.tick(target_fps())
         mx, my = pygame.mouse.get_pos()
         close_rect = close_button_rect()
         for event in pygame.event.get():

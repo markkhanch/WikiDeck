@@ -1,6 +1,7 @@
 import pygame
 
 from config import SCREEN_WIDTH, SCREEN_HEIGHT, CARD_WIDTH, CARD_HEIGHT, MUTED_TEXT, GOLD
+from data.settings_service import target_fps
 from core.card import Card
 from core.card_factory import build_card_from_spec
 from data.db import get_cached_card, get_collection
@@ -43,7 +44,7 @@ def run_collection(
     grid_cards: list[tuple[Card, dict]] = []
 
     while True:
-        clock.tick(60)
+        clock.tick(target_fps())
         mx, my = pygame.mouse.get_pos()
         close_rect = close_button_rect()
         for event in pygame.event.get():

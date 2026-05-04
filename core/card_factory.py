@@ -16,12 +16,12 @@ def _effect_type_from_runtime(on_play: Effect, on_death: Effect) -> str:
     if on_play == Effect.DRAW_1 or on_death == Effect.DRAW_1:
         return "DRAW"
     if on_play == Effect.BUFF_SELF_1 or on_death == Effect.BUFF_SELF_1:
-        return "APPLY_FLOURISH"
+        return "BOOST"
     return "NONE"
 
 
 def _ability_value_for_effect(effect_type: str) -> int:
-    if effect_type in {"DAMAGE", "HEAL"}:
+    if effect_type in {"DAMAGE", "HEAL", "BOOST"}:
         return 2
     if effect_type == "DRAW":
         return 1
@@ -37,14 +37,17 @@ def build_card(
     on_death: Effect,
     *,
     rarity: str = "COMMON",
+    epoch: str = "TIMELESS",
+    nemesis: str | None = None,
     ability_text: str = "",
     ability_trigger: str = "",
+    trigger_value: int = 0,
     effect_type: str = "",
     ability_value: int = 0,
 ) -> Card:
     resolved_effect_type = effect_type.strip().upper() or _effect_type_from_runtime(on_play, on_death)
     resolved_trigger = ability_trigger.strip() or (
-        "ON PLAY" if on_play != Effect.NONE else "ON DEATH:self" if on_death != Effect.NONE else "NO ABILITY"
+        "DEPLOY" if on_play != Effect.NONE else "DEATHWISH" if on_death != Effect.NONE else "NO ABILITY"
     )
     resolved_value = int(ability_value) if int(ability_value or 0) > 0 else _ability_value_for_effect(resolved_effect_type)
     data = get_or_fetch_article(title)
@@ -61,8 +64,11 @@ def build_card(
             on_play=on_play,
             on_death=on_death,
             rarity=rarity,
+            epoch=epoch,
+            nemesis=nemesis,
             ability_text=ability_text,
             ability_trigger=resolved_trigger,
+            trigger_value=int(trigger_value or 0),
             effect_type=resolved_effect_type,
             ability_value=resolved_value,
             max_hp=hp,
@@ -80,8 +86,11 @@ def build_card(
         base_score=base_score,
         theme=theme,
         rarity=rarity,
+        epoch=epoch,
+        nemesis=nemesis,
         ability_text=ability_text,
         ability_trigger=resolved_trigger,
+        trigger_value=int(trigger_value or 0),
         effect_type=resolved_effect_type,
         ability_value=resolved_value,
         max_hp=hp,
@@ -100,8 +109,11 @@ def build_card_from_spec(spec: dict) -> Card:
         on_play,
         on_death,
         rarity=spec.get("rarity", "COMMON"),
+        epoch=spec.get("epoch", "TIMELESS"),
+        nemesis=spec.get("nemesis"),
         ability_text=spec.get("ability_text", ""),
         ability_trigger=spec.get("trigger", ""),
+        trigger_value=int(spec.get("trigger_value", 0) or 0),
         effect_type=spec.get("effect_type", "NONE"),
         ability_value=int(spec.get("ability_value", 0) or 0),
     )

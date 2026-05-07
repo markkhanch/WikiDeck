@@ -9,7 +9,6 @@ from config import (
     DECK_TARGET,
     FIELD_LIMIT,
     FPS,
-    GENERATOR_V2,
     OLLAMA_HOST,
     OLLAMA_MAX_RETRIES,
     OLLAMA_MODEL,
@@ -267,14 +266,6 @@ SETTINGS_DEFINITIONS: tuple[SettingDefinition, ...] = tuple(
             value_type="bool",
             default=bool(USE_OLLAMA_GENERATOR),
             apply_scope="live",
-        ),
-        SettingDefinition(
-            key="ai.generator_v2",
-            label="Use generator v2",
-            category=CATEGORY_AI,
-            value_type="bool",
-            default=bool(GENERATOR_V2),
-            apply_scope="menu",
         ),
         SettingDefinition(
             key="ai.ollama_host",

@@ -10,7 +10,6 @@ Stage 3 MVP — hotseat match:
  - Match ends when both players are out of cards → scoreboard overlay
 """
 import os
-import time
 import pygame
 
 from config import (
@@ -20,16 +19,10 @@ from config import (
     BG_IMAGE_PATH,
 )
 from core.card import Card
-from core.card_factory import build_card, build_card_from_spec
+from core.card_factory import build_card_from_spec
 from data.db import init_db
 from data.db import deck_size, get_deck_cards, get_cached_card
 from data.booster import ensure_shop_singles
-from data.ollama_gen import (
-    apply_diversity,
-    generate_card_spec,
-    ollama_available,
-    get_article_from_pool,
-)
 from data.settings_service import ensure_loaded, get_bool, get_int
 from ui.screens.collection import run_collection
 from ui.screens.deck_builder import run_deck_builder
@@ -44,81 +37,11 @@ from ui.screens.shop import run_shop
 
 # ---------- asset loading ----------
 
-STARTER_CARDS = [
-    ("Albert Einstein",        "LIVING",     3, 4, "DRAW_1",         "NONE"),
-    ("Charles Darwin",         "LIVING",     4, 3, "NONE",           "DRAW_1"),
-    ("William Shakespeare",    "LIVING",     3, 3, "NONE",           "NONE"),
-    ("Moon",                   "PLACES",     4, 3, "NONE",           "NONE"),
-    ("Mount Everest",          "PLACES",     6, 2, "NONE",           "NONE"),
-    ("Pacific Ocean",          "PLACES",     7, 1, "HEAL_SELF_2",    "NONE"),
-    ("World War II",           "EVENTS",     3, 5, "DAMAGE_ENEMY_2", "NONE"),
-    ("French Revolution",      "EVENTS",     4, 4, "NONE",           "DAMAGE_ENEMY_2"),
-    ("Renaissance",            "EVENTS",     4, 3, "BUFF_SELF_1",    "NONE"),
-    ("Fire",                   "SCIENCE",    4, 3, "DAMAGE_ENEMY_2", "NONE"),
-    ("Water",                  "SCIENCE",    5, 2, "NONE",           "NONE"),
-    ("Sun",                    "SCIENCE",    3, 4, "NONE",           "NONE"),
-    ("Computer",               "TECHNOLOGY", 3, 4, "DRAW_1",         "NONE"),
-    ("Internet",               "TECHNOLOGY", 2, 5, "DRAW_1",         "NONE"),
-    ("Wheel",                  "TECHNOLOGY", 4, 2, "NONE",           "NONE"),
-    ("Jazz",                   "CULTURE",    3, 3, "NONE",           "NONE"),
-    ("Great Pyramid of Giza",  "CULTURE",    6, 2, "NONE",           "NONE"),
-    ("Democracy",              "CONCEPTS",   5, 2, "NONE",           "NONE"),
-    ("Gravity",                "CONCEPTS",   4, 3, "BUFF_SELF_1",    "NONE"),
-    ("Time",                   "CONCEPTS",   3, 3, "NONE",           "DRAW_1"),
-]
-
 def load_background() -> pygame.Surface | None:
     if not os.path.isfile(BG_IMAGE_PATH):
         return None
     bg = pygame.image.load(BG_IMAGE_PATH).convert()
     return pygame.transform.scale(bg, (SCREEN_WIDTH, SCREEN_HEIGHT))
-
-
-def build_starter_base_cards() -> list[Card]:
-    """Fetch each Wikipedia article once; return a list of Card templates."""
-    from core.effects import Effect
-    print("Building starter deck — fetching Wikipedia articles...")
-    cards = []
-    for title, theme, hp, base_score, on_play_str, on_death_str in STARTER_CARDS:
-        print(f"  {title} ...")
-        on_play = getattr(Effect, on_play_str, Effect.NONE)
-        on_death = getattr(Effect, on_death_str, Effect.NONE)
-        cards.append(build_card(title, theme, hp, base_score, on_play, on_death, rarity="COMMON"))
-    return cards
-
-
-def build_ai_base_cards(target_count: int) -> list[Card]:
-    """Generate cards via Ollama; fall back to starter cards if needed."""
-    print("Building AI deck — generating cards with Ollama...")
-    cards: list[Card] = []
-    seen: set[str] = set()
-    attempts = 0
-    max_attempts = target_count * 12
-    diversity = {"effects": {}, "triggers": {}, "target": target_count}
-
-    while len(cards) < target_count:
-        attempts += 1
-        if attempts > max_attempts:
-            raise RuntimeError(
-                "Unable to fetch enough Wikipedia images. "
-                "Check network access to Wikipedia and try again."
-            )
-        title, summary, rarity = get_article_from_pool()
-        if title in seen:
-            continue
-        spec = generate_card_spec(title, summary, rarity, diversity=diversity)
-
-        card = build_card_from_spec(spec)
-        if card.image is None:
-            print(f"  [skip] No image for {spec['title']}, retrying...", flush=True)
-            continue
-        cards.append(card)
-        apply_diversity(diversity, spec)
-        seen.add(title)
-        print(f"  [{len(cards)}/{target_count}] {spec['title']} ✓", flush=True)
-        time.sleep(0.25)
-
-    return cards
 
 
 def build_cards_from_deck() -> list[Card]:

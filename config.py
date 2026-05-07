@@ -8,21 +8,13 @@ import os
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(_ROOT, "ui", "assets")
 IMAGES_DIR = os.path.join(ASSETS_DIR, "images")
-FONTS_DIR  = os.path.join(ASSETS_DIR, "fonts")
-ICONS_DIR  = os.path.join(ASSETS_DIR, "icons")
 
 BG_IMAGE_PATH   = os.path.join(IMAGES_DIR, "bg_main.png")
-BOOSTER_IMAGE_PATH = os.path.join(IMAGES_DIR, "Boosterpack.png")
 CARD_IMAGES_DIR = os.path.join(ASSETS_DIR, "card_images")
 DB_PATH         = os.path.join(_ROOT, "data", "wikideck.db")
-
-# ---- Persistent data ----
-DB_PATH         = os.path.join(_ROOT, "data", "wikideck.db")
-CARD_IMAGES_DIR = os.path.join(ASSETS_DIR, "card_images")
 
 # ---- Ollama (AI card generation) ----
 USE_OLLAMA_GENERATOR = os.getenv("WIKIDECK_USE_OLLAMA", "1") == "1"
-GENERATOR_V2 = os.getenv("WIKIDECK_GENERATOR_V2", "1") == "1"
 _OLLAMA_HOST_LOCAL_FILE = os.path.join(_ROOT, ".ollama_host")
 _OLLAMA_HOST_LOCAL = ""
 if os.path.isfile(_OLLAMA_HOST_LOCAL_FILE):
@@ -108,11 +100,3 @@ FIELD_LIMIT        = 15
 DECK_MIN = 15
 DECK_MAX = 25
 DECK_TARGET = 20
-BOOSTER_PACK_SIZE = 5
-RANDOM_PACK_ODDS = {
-    "COMMON": 70,
-    "UNCOMMON": 20,
-    "RARE": 8,
-    "EPIC": 2,
-    "LEGENDARY": 0,
-}

@@ -43,14 +43,12 @@ This project uses **Pygame** for the game client and **Ollama**
 
 ## AI Use
 
-Ollama is used to generate card abilities from Wikipedia article summaries. 
-Claude was used throughout design and planning as a thinking partner for 
-game design decisions.
+Ollama is used to generate card abilities from Wikipedia article summaries.
 
 ## Security Notes (before publishing)
 
 - Do not commit local runtime data: `data/wikideck.db`, `ui/assets/card_images/`, `.env*`.
-- Do not commit local tooling settings: `.claude/`, `.vscode/`, `__pycache__/`, `.DS_Store`.
+- Do not commit local tooling settings: `.vscode/`, `__pycache__/`, `.DS_Store`.
 - Multiplayer server is WebSocket MVP with no authentication/encryption layer; run only on trusted LAN unless you add auth/TLS.
 
 ## Author

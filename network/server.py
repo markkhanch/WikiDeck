@@ -59,7 +59,6 @@ def _clone_card(card: Card) -> Card:
         title=card.title,
         hp=card.hp,
         max_hp=getattr(card, "max_hp", card.hp),
-        base_score=card.base_score,
         theme=card.theme,
         rarity=card.rarity,
         epoch=getattr(card, "epoch", "TIMELESS"),

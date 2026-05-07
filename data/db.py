@@ -249,12 +249,52 @@ def get_or_fetch_image(title: str, url: Optional[str]) -> Optional[pygame.Surfac
 
 # ---- Generated card cache ----
 
+def _normalize_effect_for_strengthless_mode(effect_type: str) -> str:
+    normalized = str(effect_type or "NONE").strip().upper()
+    if normalized == "BOOST":
+        return "VITALITY"
+    if normalized == "DRAIN":
+        return "DAMAGE"
+    return normalized or "NONE"
+
+
+def _rewrite_legacy_strength_text(effect_type: str, ability_text: str, ability_value: int) -> str:
+    text = str(ability_text or "").strip()
+    if effect_type == "VITALITY":
+        if not text or re.search(r"\bboost\b", text, re.IGNORECASE):
+            return f"Give this card Vitality for {max(1, int(ability_value or 0))} turns."
+    if effect_type == "DAMAGE":
+        if not text or re.search(r"\bdrain\b", text, re.IGNORECASE):
+            return f"Deal {max(1, int(ability_value or 0))} damage to one enemy card."
+    return text
+
+
+def _row_to_card_spec(row: sqlite3.Row, *, title_override: str | None = None) -> dict:
+    raw_effect = str(row["effect_type"] or "NONE")
+    effect_type = _normalize_effect_for_strengthless_mode(raw_effect)
+    base_value = int(row["ability_value"] or 0)
+    ability_value = max(1, base_value) if raw_effect.upper() in {"BOOST", "DRAIN"} else base_value
+    return {
+        "title": title_override or row["title"],
+        "theme": row["theme"],
+        "epoch": row["epoch"],
+        "rarity": row["rarity"],
+        "trigger": row["trigger"],
+        "trigger_value": row["trigger_value"],
+        "effect_type": effect_type,
+        "ability_text": _rewrite_legacy_strength_text(effect_type, row["ability_text"] or "", ability_value),
+        "ability_value": ability_value,
+        "nemesis": row["nemesis"],
+        "hp": row["hp"],
+    }
+
+
 def get_cached_card(title: str, rarity: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
             """
-            SELECT theme, epoch, rarity, trigger, trigger_value, effect_type,
-                   ability_text, ability_value, nemesis, hp, base_score
+            SELECT title, theme, epoch, rarity, trigger, trigger_value, effect_type,
+                   ability_text, ability_value, nemesis, hp
             FROM cards
             WHERE title = ? AND rarity = ?
             """,
@@ -262,20 +302,7 @@ def get_cached_card(title: str, rarity: str) -> Optional[dict]:
         ).fetchone()
     if row is None:
         return None
-    return {
-        "title": title,
-        "theme": row["theme"],
-        "epoch": row["epoch"],
-        "rarity": row["rarity"],
-        "trigger": row["trigger"],
-        "trigger_value": row["trigger_value"],
-        "effect_type": row["effect_type"],
-        "ability_text": row["ability_text"] or "",
-        "ability_value": row["ability_value"],
-        "nemesis": row["nemesis"],
-        "hp": row["hp"],
-        "base_score": row["base_score"],
-    }
+    return _row_to_card_spec(row, title_override=title)
 
 
 def get_fallback_cached_card(title: str, rarity: str) -> Optional[dict]:
@@ -283,7 +310,7 @@ def get_fallback_cached_card(title: str, rarity: str) -> Optional[dict]:
         row = conn.execute(
             """
             SELECT title, theme, epoch, rarity, trigger, trigger_value, effect_type,
-                   ability_text, ability_value, nemesis, hp, base_score
+                   ability_text, ability_value, nemesis, hp
             FROM cards
             WHERE title = ?
             ORDER BY CASE WHEN rarity = ? THEN 0 ELSE 1 END, generated_at DESC
@@ -295,7 +322,7 @@ def get_fallback_cached_card(title: str, rarity: str) -> Optional[dict]:
             row = conn.execute(
                 """
                 SELECT title, theme, epoch, rarity, trigger, trigger_value, effect_type,
-                       ability_text, ability_value, nemesis, hp, base_score
+                       ability_text, ability_value, nemesis, hp
                 FROM cards
                 WHERE rarity = ?
                 ORDER BY RANDOM()
@@ -307,7 +334,7 @@ def get_fallback_cached_card(title: str, rarity: str) -> Optional[dict]:
             row = conn.execute(
                 """
                 SELECT title, theme, epoch, rarity, trigger, trigger_value, effect_type,
-                       ability_text, ability_value, nemesis, hp, base_score
+                       ability_text, ability_value, nemesis, hp
                 FROM cards
                 ORDER BY RANDOM()
                 LIMIT 1
@@ -315,20 +342,7 @@ def get_fallback_cached_card(title: str, rarity: str) -> Optional[dict]:
             ).fetchone()
     if row is None:
         return None
-    return {
-        "title": row["title"],
-        "theme": row["theme"],
-        "epoch": row["epoch"],
-        "rarity": row["rarity"],
-        "trigger": row["trigger"],
-        "trigger_value": row["trigger_value"],
-        "effect_type": row["effect_type"],
-        "ability_text": row["ability_text"] or "",
-        "ability_value": row["ability_value"],
-        "nemesis": row["nemesis"],
-        "hp": row["hp"],
-        "base_score": row["base_score"],
-    }
+    return _row_to_card_spec(row)
 
 
 def save_card(card: dict) -> None:
@@ -352,7 +366,7 @@ def save_card(card: dict) -> None:
                 int(card.get("ability_value", 0)),
                 card.get("nemesis"),
                 int(card.get("hp", 1)),
-                int(card.get("base_score", 1)),
+                int(card.get("base_score", 0)),
             ),
         )
 

@@ -45,26 +45,26 @@ from ui.screens.shop import run_shop
 # ---------- asset loading ----------
 
 STARTER_CARDS = [
-    ("Albert Einstein",        "LIVING",     3, 4, "DRAW_1",         "NONE"),
-    ("Charles Darwin",         "LIVING",     4, 3, "NONE",           "DRAW_1"),
-    ("William Shakespeare",    "LIVING",     3, 3, "NONE",           "NONE"),
-    ("Moon",                   "PLACES",     4, 3, "NONE",           "NONE"),
-    ("Mount Everest",          "PLACES",     6, 2, "NONE",           "NONE"),
-    ("Pacific Ocean",          "PLACES",     7, 1, "HEAL_SELF_2",    "NONE"),
-    ("World War II",           "EVENTS",     3, 5, "DAMAGE_ENEMY_2", "NONE"),
-    ("French Revolution",      "EVENTS",     4, 4, "NONE",           "DAMAGE_ENEMY_2"),
-    ("Renaissance",            "EVENTS",     4, 3, "BUFF_SELF_1",    "NONE"),
-    ("Fire",                   "SCIENCE",    4, 3, "DAMAGE_ENEMY_2", "NONE"),
-    ("Water",                  "SCIENCE",    5, 2, "NONE",           "NONE"),
-    ("Sun",                    "SCIENCE",    3, 4, "NONE",           "NONE"),
-    ("Computer",               "TECHNOLOGY", 3, 4, "DRAW_1",         "NONE"),
-    ("Internet",               "TECHNOLOGY", 2, 5, "DRAW_1",         "NONE"),
-    ("Wheel",                  "TECHNOLOGY", 4, 2, "NONE",           "NONE"),
-    ("Jazz",                   "CULTURE",    3, 3, "NONE",           "NONE"),
-    ("Great Pyramid of Giza",  "CULTURE",    6, 2, "NONE",           "NONE"),
-    ("Democracy",              "CONCEPTS",   5, 2, "NONE",           "NONE"),
-    ("Gravity",                "CONCEPTS",   4, 3, "BUFF_SELF_1",    "NONE"),
-    ("Time",                   "CONCEPTS",   3, 3, "NONE",           "DRAW_1"),
+    ("Albert Einstein",        "LIVING",     3, "DRAW_1",         "NONE"),
+    ("Charles Darwin",         "LIVING",     4, "NONE",           "DRAW_1"),
+    ("William Shakespeare",    "LIVING",     3, "NONE",           "NONE"),
+    ("Moon",                   "PLACES",     4, "NONE",           "NONE"),
+    ("Mount Everest",          "PLACES",     6, "NONE",           "NONE"),
+    ("Pacific Ocean",          "PLACES",     7, "HEAL_SELF_2",    "NONE"),
+    ("World War II",           "EVENTS",     3, "DAMAGE_ENEMY_2", "NONE"),
+    ("French Revolution",      "EVENTS",     4, "NONE",           "DAMAGE_ENEMY_2"),
+    ("Renaissance",            "EVENTS",     4, "BUFF_SELF_1",    "NONE"),
+    ("Fire",                   "SCIENCE",    4, "DAMAGE_ENEMY_2", "NONE"),
+    ("Water",                  "SCIENCE",    5, "NONE",           "NONE"),
+    ("Sun",                    "SCIENCE",    3, "NONE",           "NONE"),
+    ("Computer",               "TECHNOLOGY", 3, "DRAW_1",         "NONE"),
+    ("Internet",               "TECHNOLOGY", 2, "DRAW_1",         "NONE"),
+    ("Wheel",                  "TECHNOLOGY", 4, "NONE",           "NONE"),
+    ("Jazz",                   "CULTURE",    3, "NONE",           "NONE"),
+    ("Great Pyramid of Giza",  "CULTURE",    6, "NONE",           "NONE"),
+    ("Democracy",              "CONCEPTS",   5, "NONE",           "NONE"),
+    ("Gravity",                "CONCEPTS",   4, "BUFF_SELF_1",    "NONE"),
+    ("Time",                   "CONCEPTS",   3, "NONE",           "DRAW_1"),
 ]
 
 def load_background() -> pygame.Surface | None:
@@ -79,11 +79,11 @@ def build_starter_base_cards() -> list[Card]:
     from core.effects import Effect
     print("Building starter deck — fetching Wikipedia articles...")
     cards = []
-    for title, theme, hp, base_score, on_play_str, on_death_str in STARTER_CARDS:
+    for title, theme, hp, on_play_str, on_death_str in STARTER_CARDS:
         print(f"  {title} ...")
         on_play = getattr(Effect, on_play_str, Effect.NONE)
         on_death = getattr(Effect, on_death_str, Effect.NONE)
-        cards.append(build_card(title, theme, hp, base_score, on_play, on_death, rarity="COMMON"))
+        cards.append(build_card(title, theme, hp, on_play, on_death, rarity="COMMON"))
     return cards
 
 

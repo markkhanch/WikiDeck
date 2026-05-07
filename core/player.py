@@ -3,6 +3,7 @@
 MVP: no gold spending, no XP, no saved decks. Just the four zones
 and helpers to draw and play cards. GDD §5.1 / §7.1.
 """
+import random
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -22,10 +23,10 @@ class Player:
 
     # ---- deck operations ----
     def draw_card(self) -> Optional[Card]:
-        """Top-deck one card into hand. Returns the card, or None if deck is empty."""
+        """Draw one random card from deck into hand."""
         if not self.deck:
             return None
-        card = self.deck.pop(0)
+        card = self.deck.pop(random.randrange(len(self.deck)))
         self.hand.append(card)
         return card
 

@@ -97,8 +97,8 @@ P2_FIELD_ZONE = (0, 185, SCREEN_WIDTH, 140)
 # Visual divider between the two halves of the board
 DIVIDER_Y = 340
 
-# End Turn button — bottom-right corner
-END_TURN_BUTTON_RECT = (SCREEN_WIDTH - 195, SCREEN_HEIGHT - 60, 180, 50)
+# End Turn button — middle-right
+END_TURN_BUTTON_RECT = (SCREEN_WIDTH - 195, SCREEN_HEIGHT // 2 - 25, 180, 50)
 
 # ---- Match parameters (GDD §5.1 — trimmed for MVP) ----
 STARTING_HAND_SIZE = 5    # full game says 10; use 5 while deck is small

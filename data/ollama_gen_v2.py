@@ -130,16 +130,13 @@ def _gwent_few_shot(rarity: str, n: int = 4) -> str:
     return "\n".join(lines)
 
 HP_CAPS = {"COMMON": 4, "UNCOMMON": 5, "RARE": 6, "EPIC": 7, "LEGENDARY": 8}
-BASE_SCORE_CAPS = {"COMMON": 4, "UNCOMMON": 5, "RARE": 6, "EPIC": 7, "LEGENDARY": 8}
 MIN_STAT_FLOORS = {"COMMON": 2, "UNCOMMON": 2, "RARE": 3, "EPIC": 3, "LEGENDARY": 4}
 
 ABILITY_COSTS = {
     "DAMAGE": 1.4,
     "DESTROY": 1.8,
     "BANISH": 2.0,
-    "BOOST": 1.2,
     "HEAL": 1.1,
-    "DRAIN": 1.4,
     "BLEEDING": 1.5,
     "POISON": 1.6,
     "VITALITY": 1.1,
@@ -160,9 +157,7 @@ VALID_EFFECTS = {
     "DAMAGE",
     "DESTROY",
     "BANISH",
-    "BOOST",
     "HEAL",
-    "DRAIN",
     "BLEEDING",
     "POISON",
     "VITALITY",
@@ -200,9 +195,7 @@ EFFECT_TYPE_TO_EFFECT = {
     "DAMAGE": Effect.DAMAGE_ENEMY_2,
     "DESTROY": Effect.DAMAGE_ENEMY_2,
     "BANISH": Effect.DAMAGE_ENEMY_2,
-    "BOOST": Effect.BUFF_SELF_1,
     "HEAL": Effect.HEAL_SELF_2,
-    "DRAIN": Effect.DAMAGE_ENEMY_2,
     "BLEEDING": Effect.NONE,
     "POISON": Effect.NONE,
     "VITALITY": Effect.BUFF_SELF_1,
@@ -660,11 +653,11 @@ def _effect_candidates(hits: dict[str, int], theme: str = "LIVING") -> list[str]
     if hits.get("assassin", 0) or hits.get("collapse", 0):
         candidates.extend(["BLEEDING", "POISON", "DESTROY"])
     if hits.get("education", 0):
-        candidates.extend(["DRAW", "BOOST", "VITALITY", "GOLD"])
+        candidates.extend(["DRAW", "VITALITY", "GOLD"])
     if hits.get("culture", 0):
-        candidates.extend(["BOOST", "VITALITY", "SHIELD", "DRAW"])
+        candidates.extend(["VITALITY", "SHIELD", "DRAW"])
     if hits.get("religion", 0):
-        candidates.extend(["BOOST", "REVIVE", "VITALITY", "HEAL"])
+        candidates.extend(["REVIVE", "VITALITY", "HEAL"])
     if hits.get("politics", 0) or hits.get("economy", 0):
         candidates.extend(["LOCK", "GOLD", "BANISH"])
     if hits.get("fortress", 0):
@@ -672,9 +665,9 @@ def _effect_candidates(hits: dict[str, int], theme: str = "LIVING") -> list[str]
 
     if not candidates:
         if theme == "LIVING":
-            candidates = ["DRAW", "BOOST", "VITALITY", "HEAL", "GOLD", "SHIELD"]
+            candidates = ["DRAW", "VITALITY", "HEAL", "GOLD", "SHIELD"]
         else:
-            candidates = ["BOOST"]
+            candidates = ["VITALITY"]
 
     unique: list[str] = []
     for effect in candidates:
@@ -686,9 +679,9 @@ def _effect_candidates(hits: dict[str, int], theme: str = "LIVING") -> list[str]
 def _trigger_candidates(effect_type: str) -> list[str]:
     if effect_type in {"DAMAGE", "DESTROY", "BANISH", "BLEEDING", "POISON", "LOCK", "DUEL", "CLASH"}:
         return ["DEPLOY", "DEATHBLOW"]
-    if effect_type in {"HEAL", "BOOST", "VITALITY", "SHIELD", "IMMUNITY", "VEIL", "REVIVE"}:
+    if effect_type in {"HEAL", "VITALITY", "SHIELD", "IMMUNITY", "VEIL", "REVIVE"}:
         return ["DEPLOY", "DEATHWISH", "ON DEATH:ally"]
-    if effect_type in {"DRAW", "DISCARD", "GOLD", "DRAIN"}:
+    if effect_type in {"DRAW", "DISCARD", "GOLD"}:
         return ["DEPLOY", "ORDER", "DEATHBLOW"]
     return ["DEPLOY"]
 
@@ -712,7 +705,7 @@ def _choose_with_diversity(
 
 
 def _ability_value(effect_type: str, rarity: str) -> int:
-    if effect_type in {"DAMAGE", "BOOST", "DRAIN", "BLEEDING", "VITALITY", "DRAW", "DISCARD", "GOLD"}:
+    if effect_type in {"DAMAGE", "BLEEDING", "VITALITY", "DRAW", "DISCARD", "GOLD"}:
         return 1 if rarity == "COMMON" else 2
     if effect_type in {"POISON", "DESTROY", "BANISH", "HEAL", "SHIELD", "IMMUNITY", "LOCK", "VEIL", "DOOMED", "DUEL", "CLASH", "REVIVE", "NONE"}:
         return 0
@@ -726,12 +719,8 @@ def _ability_text_template(effect_type: str, value: int) -> str:
         return "Destroy one enemy card."
     if effect_type == "BANISH":
         return "Banish one enemy card."
-    if effect_type == "BOOST":
-        return f"Boost self by {value}."
     if effect_type == "HEAL":
         return "Heal this card."
-    if effect_type == "DRAIN":
-        return f"Drain {value} from an enemy card."
     if effect_type == "BLEEDING":
         return f"Give an enemy card Bleeding for {value} turns."
     if effect_type == "POISON":
@@ -758,7 +747,7 @@ def _ability_text_template(effect_type: str, value: int) -> str:
         return "Return one card from your discard pile to the field."
     if effect_type == "GOLD":
         return f"Gain {value} gold."
-    return "Boost self by 1."
+    return "Give this card Vitality for 1 turn."
 
 
 def _with_trigger_context(trigger: str, ability_text: str) -> str:
@@ -832,8 +821,8 @@ def build_system_prompt() -> str:
         "- Under 20 words\n"
         "- Must contain ONLY mechanic and target (no explanations, no flavor)\n"
         "- One verb, one target, period\n"
-        "- Only use these game terms: HP, Score, BLEEDING, VITALITY, POISON,\n"
-        "  SHIELD, IMMUNITY, LOCK, VEIL, BOOST, gold, cards\n"
+        "- Only use these game terms: HP, BLEEDING, VITALITY, POISON,\n"
+        "  SHIELD, IMMUNITY, LOCK, VEIL, gold, cards\n"
         "FORBIDDEN words - never use these in ability_text:\n"
         "attack, defense, morale, faith, influence, power, strength, mana\n"
         "- If trigger is DEATHWISH, ability_text MUST start with: \"Deathwish: ...\"\n"
@@ -845,8 +834,7 @@ def build_system_prompt() -> str:
         "- Complete sentence with a period\n\n"
         "DEPLOY examples:\n"
         '- "Deal 2 damage to one enemy card."\n'
-        '- "Boost self by 2."\n'
-        '- "Drain 2 from an enemy card."\n'
+        '- "Give this card Vitality for 2 turns."\n'
         '- "Give an enemy card Bleeding for 3 turns."\n'
         '- "Give this card Immunity."\n'
         '- "Give this card Shield."\n'
@@ -859,24 +847,24 @@ def build_system_prompt() -> str:
         '- "Gain 2 gold."\n\n'
         "ORDER examples (can be used once per turn):\n"
         '- "Order: Deal 3 damage to one enemy card."\n'
-        '- "Order: Boost an allied card by 2."\n'
+        '- "Order: Give this card Vitality for 2 turns."\n'
         '- "Order: Heal this card."\n\n'
         "DEATHWISH examples (trigger on this card's death):\n"
-        '- "Deathwish: Boost all allied cards by 1."\n'
+        '- "Deathwish: Give this card Vitality for 2 turns."\n'
         '- "Deathwish: Draw 2 cards."\n'
         '- "Deathwish: Deal 2 damage to all enemy cards."\n\n'
         "DEATHBLOW examples (trigger when this card destroys another):\n"
         '- "Deathblow: Gain 2 gold."\n'
-        '- "Deathblow: Boost self by 3."\n'
+        '- "Deathblow: Give this card Vitality for 3 turns."\n'
         '- "Deathblow: Draw 1 card."\n\n'
         "TIMER examples:\n"
         '- "Timer 3: Destroy the highest-HP enemy card."\n'
-        '- "Timer 2: Boost self by 4."\n\n'
+        '- "Timer 2: Give this card Vitality for 4 turns."\n\n'
         "BLEEDING examples:\n"
         '- "Give an enemy card Bleeding for 2 turns."\n\n'
         "WRONG:\n"
         '- "Deal 2 damage and draw 1 card."\n'
-        '- "Order Boost self by 2."\n'
+        '- "Order Give this card Vitality for 2 turns."\n'
         '- "When deployed, deal 2 damage."\n\n'
         "Rules for nemesis:\n"
         "- A real Wikipedia article title of a historical rival or opponent\n"
@@ -901,8 +889,8 @@ def build_user_prompt(spec: dict, summary: str) -> str:
 Ability complexity reference for {rarity} cards (from a balanced card game):
 {few_shot}
 Use these as inspiration for complexity level only - do NOT copy them literally.
-Write ability_text using only WikiDeck terms: HP, Score, BLEEDING, VITALITY,
-POISON, SHIELD, IMMUNITY, LOCK, VEIL, BOOST, gold, cards.
+Write ability_text using only WikiDeck terms: HP, BLEEDING, VITALITY,
+POISON, SHIELD, IMMUNITY, LOCK, VEIL, gold, cards.
 """
 
     return f"""Person: {spec['title']}
@@ -915,8 +903,7 @@ Ability value: {spec['ability_value']}
 
 Examples of correct ability_text for different mechanics:
 DAMAGE: "Deal 2 damage to one enemy card."
-BOOST: "Boost self by 2."
-DRAIN: "Drain 2 from an enemy card."
+VITALITY: "Give this card Vitality for 2 turns."
 BLEEDING: "Give an enemy card Bleeding for 3 turns."
 HEAL: "Heal this card."
 DRAW: "Draw 2 cards."
@@ -926,7 +913,7 @@ BANISH: "Banish one enemy card."
 SHIELD: "Give this card Shield."
 LOCK: "Lock an enemy card."
 REVIVE: "Return one card from your discard pile to the field."
-DEATHWISH context: "Deathwish: Boost all allied cards by 1."
+DEATHWISH context: "Deathwish: Give this card Vitality for 1 turn."
 {few_shot_block}"""
 
 
@@ -1098,9 +1085,7 @@ def _balance_card(spec: dict) -> dict:
         cost += 0.3
 
     hp = max(floor, min(HP_CAPS.get(rarity, 5), round(1.2 + budget - 0.6 * cost)))
-    base_score = max(floor, min(BASE_SCORE_CAPS.get(rarity, 5), round(1.0 + budget - 0.4 * cost + 0.12 * value)))
     spec["hp"] = int(hp)
-    spec["base_score"] = int(base_score)
     return spec
 
 
@@ -1196,7 +1181,7 @@ def generate_card_spec(
         save_card(spec)
         print(
             f"[gen] done: {title} [{rarity}] {spec['trigger']} -> {spec['effect_type']} "
-            f"HP={spec['hp']} SC={spec['base_score']}",
+            f"HP={spec['hp']}",
             flush=True,
         )
         return spec
@@ -1221,7 +1206,6 @@ def generate_card_response(title: str, summary: str, rarity: str) -> str:
         '    "ability_text": "%s",\n'
         '    "nemesis": %s,\n'
         '    "hp": %d,\n'
-        '    "base_score": %d,\n'
         '    "source_type": "%s",\n'
         '    "source_ref": "%s",\n'
         '    "summary_snippet": "%s"\n'
@@ -1240,7 +1224,6 @@ def generate_card_response(title: str, summary: str, rarity: str) -> str:
             spec["ability_text"].replace('"', '\\"'),
             "null" if spec.get("nemesis") is None else f"\"{spec['nemesis'].replace('\"', '\\\"')}\"",
             int(spec["hp"]),
-            int(spec["base_score"]),
             spec["source_type"],
             spec["source_ref"].replace('"', '\\"'),
             spec["summary_snippet"].replace('"', '\\"'),
@@ -1281,6 +1264,11 @@ def effects_from_spec(
         trigger_type = str(trigger or "NO ABILITY")
 
     _ = ability_value
+    effect_type = effect_type.strip().upper()
+    if effect_type == "BOOST":
+        effect_type = "VITALITY"
+    elif effect_type == "DRAIN":
+        effect_type = "DAMAGE"
     effect = EFFECT_TYPE_TO_EFFECT.get(effect_type, Effect.NONE)
     trigger_norm = str(trigger_type or "NO ABILITY").strip().upper()
 

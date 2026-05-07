@@ -9,24 +9,8 @@ from typing import Optional
 
 import pygame
 
-from config import (
-    CARD_WIDTH,
-    CARD_HEIGHT,
-    BG_DARK,
-    BG_LIGHT,
-    WHITE_TEXT,
-    NEON_GREEN,
-    NEON_RED,
-    GOLD,
-    THEME_COLORS,
-    RARITY_COLORS,
-)
+from config import CARD_WIDTH, CARD_HEIGHT, BG_DARK, BG_LIGHT, WHITE_TEXT, NEON_RED, GOLD, THEME_COLORS, RARITY_COLORS
 from core.effects import Effect
-
-
-def _text_color_for(bg: tuple[int, int, int]) -> tuple[int, int, int]:
-    luminance = 0.2126 * bg[0] + 0.7152 * bg[1] + 0.0722 * bg[2]
-    return BG_DARK if luminance > 165 else WHITE_TEXT
 
 
 def _draw_text_with_shadow(
@@ -88,7 +72,6 @@ def _blit_contain(
 class Card:
     title: str
     hp: int = 3
-    base_score: int = 3
     theme: str = "CONCEPTS"
     rarity: str = "COMMON"
     epoch: str = "TIMELESS"
@@ -149,57 +132,58 @@ class Card:
 
     # ---- rendering ----
     def draw(self, surface: pygame.Surface) -> None:
-        """Render this card at its current rect in compact state (GDD §11.5)."""
+        """Render this card with full-bleed art and compact overlays."""
         theme_color  = THEME_COLORS.get(self.theme, WHITE_TEXT)
         border_color = RARITY_COLORS.get(self.rarity, WHITE_TEXT)
         x, y = int(self.rect.x), int(self.rect.y)
+        frame = pygame.Rect(x, y, CARD_WIDTH, CARD_HEIGHT)
+        inner = frame.inflate(-4, -4)
 
-        # Background + rarity-colored border
-        pygame.draw.rect(surface, BG_LIGHT, self.rect)
-        pygame.draw.rect(surface, border_color, self.rect, width=2)
+        pygame.draw.rect(surface, BG_LIGHT, frame, border_radius=8)
+        pygame.draw.rect(surface, border_color, frame, width=2, border_radius=8)
 
-        # Photo strip — top 40% of the card
-        photo_h = int(CARD_HEIGHT * 0.40)
-        photo_rect = pygame.Rect(x + 2, y + 2, CARD_WIDTH - 4, max(1, photo_h - 4))
+        # Full-card artwork (no cropped strip).
         if self.image is not None:
             iw, ih = self.image.get_size()
-            rect_ratio = photo_rect.width / photo_rect.height
+            rect_ratio = inner.width / max(1, inner.height)
             img_ratio = iw / ih if ih else rect_ratio
-            if img_ratio > rect_ratio * 1.7 or img_ratio < rect_ratio * 0.6:
-                _blit_contain(surface, self.image, photo_rect, _darken(theme_color, 0.35))
+            if img_ratio > rect_ratio * 1.9 or img_ratio < rect_ratio * 0.55:
+                _blit_contain(surface, self.image, inner, _darken(theme_color, 0.4))
             else:
-                _blit_cover(surface, self.image, photo_rect)
+                _blit_cover(surface, self.image, inner)
         else:
-            # No Wikipedia thumbnail — draw a theme-coloured tile with the
-            # first letter of the title, so the card still has identity.
-            pygame.draw.rect(surface, theme_color, photo_rect)
+            pygame.draw.rect(surface, _darken(theme_color, 0.6), inner)
             initial = (self.title[:1] or "?").upper()
-            font_initial = pygame.font.SysFont("arial", 28, bold=True)
+            font_initial = pygame.font.SysFont("arial", 34, bold=True)
             ini_surf = font_initial.render(initial, True, WHITE_TEXT)
-            surface.blit(ini_surf, ini_surf.get_rect(center=photo_rect.center))
+            surface.blit(ini_surf, ini_surf.get_rect(center=inner.center))
 
-        # Title bar
-        title_bar = pygame.Rect(x, y + photo_h, CARD_WIDTH, 22)
-        pygame.draw.rect(surface, theme_color, title_bar)
+        # Readability overlays.
+        tint = pygame.Surface(inner.size, pygame.SRCALPHA)
+        tint.fill((0, 0, 0, 54))
+        surface.blit(tint, inner.topleft)
+        top_band_h = 26
+        bottom_band_h = 34
+        top_band = pygame.Surface((inner.width, top_band_h), pygame.SRCALPHA)
+        top_band.fill((0, 0, 0, 170))
+        surface.blit(top_band, (inner.x, inner.y))
+        bottom_band = pygame.Surface((inner.width, bottom_band_h), pygame.SRCALPHA)
+        bottom_band.fill((0, 0, 0, 190))
+        surface.blit(bottom_band, (inner.x, inner.bottom - bottom_band_h))
+
+        # Title on bottom band.
         font_title = pygame.font.SysFont("arial", 11, bold=True)
-        title_color = _text_color_for(theme_color)
-        _draw_text_with_shadow(surface, font_title, self.title[:16], title_color, (x + 4, y + photo_h + 5))
+        _draw_text_with_shadow(surface, font_title, self.title[:18], WHITE_TEXT, (inner.x + 4, inner.bottom - 24))
 
-        # Trigger indicator — small gold dot top-right if the card has any effect
-        has_effect = (
-            self.on_play not in (None, Effect.NONE)
-            or self.on_death not in (None, Effect.NONE)
-            or str(self.effect_type or "NONE").upper() != "NONE"
-        )
-        if has_effect:
-            pygame.draw.circle(surface, GOLD, (x + CARD_WIDTH - 7, y + 7), 4)
-            pygame.draw.circle(surface, BG_DARK, (x + CARD_WIDTH - 7, y + 7), 4, width=1)
+        # HP top-left.
+        font_stat = pygame.font.SysFont("arial", 10, bold=True)
+        hp_rect = pygame.Rect(inner.x + 4, inner.y + 4, 40, 18)
+        pygame.draw.rect(surface, BG_DARK, hp_rect)
+        pygame.draw.rect(surface, NEON_RED, hp_rect, width=1)
+        hp_surf = font_stat.render(f"HP{self.hp}", True, NEON_RED)
+        surface.blit(hp_surf, hp_surf.get_rect(center=hp_rect.center))
 
-        # Stats — HP left (red), base_score right (green)
-        font_stat = pygame.font.SysFont("arial", 13, bold=True)
-        hp_surf = font_stat.render(f"HP {self.hp}", True, NEON_RED)
-        bs_surf = font_stat.render(f"SC {self.base_score}", True, NEON_GREEN)
-        stat_y = y + CARD_HEIGHT - 22
+        # Status strip above title if statuses are active.
         status_labels: list[str] = []
         for name in sorted(self.statuses):
             value = self.statuses[name]
@@ -218,10 +202,8 @@ class Card:
             display = ", ".join(status_labels[:2])
             if len(status_labels) > 2:
                 display += f" +{len(status_labels) - 2}"
-            badge_rect = pygame.Rect(x + 4, stat_y - 12, CARD_WIDTH - 8, 10)
+            badge_rect = pygame.Rect(inner.x + 4, inner.bottom - bottom_band_h - 11, inner.width - 8, 10)
             pygame.draw.rect(surface, BG_DARK, badge_rect)
             pygame.draw.rect(surface, GOLD, badge_rect, width=1)
             status_surf = badge_font.render(display, True, GOLD)
             surface.blit(status_surf, (badge_rect.x + 2, badge_rect.y))
-        surface.blit(hp_surf, (x + 4, stat_y))
-        surface.blit(bs_surf, (x + CARD_WIDTH - bs_surf.get_width() - 4, stat_y))

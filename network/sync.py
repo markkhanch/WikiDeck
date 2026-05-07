@@ -34,7 +34,6 @@ def serialize_card(card: Card) -> dict[str, Any]:
         "title": card.title,
         "hp": int(card.hp),
         "max_hp": int(getattr(card, "max_hp", card.hp) or card.hp),
-        "base_score": int(card.base_score),
         "effect_type": str(getattr(card, "effect_type", "NONE") or "NONE"),
         "trigger": str(getattr(card, "ability_trigger", "") or ""),
         "ability_text": str(getattr(card, "ability_text", "") or ""),
@@ -89,6 +88,7 @@ def serialize_state(game: GameState) -> dict[str, Any]:
             "name": p1.name,
             "field": [serialize_card(c) for c in p1.on_field],
             "hand": [serialize_card(c) for c in p1.hand],
+            "deck": [serialize_card(c) for c in p1.deck],
             "deck_count": len(p1.deck),
             "discard": [serialize_card(c) for c in p1.discard],
             "gold": int(p1.gold),
@@ -97,6 +97,7 @@ def serialize_state(game: GameState) -> dict[str, Any]:
             "name": p2.name,
             "field": [serialize_card(c) for c in p2.on_field],
             "hand": [serialize_card(c) for c in p2.hand],
+            "deck": [serialize_card(c) for c in p2.deck],
             "deck_count": len(p2.deck),
             "discard": [serialize_card(c) for c in p2.discard],
             "gold": int(p2.gold),
@@ -125,7 +126,6 @@ def _deserialize_cards(cards: Iterable[dict[str, Any]]) -> list[Card]:
             title=str(payload.get("title", "Unknown")),
             hp=int(payload.get("hp", 1) or 1),
             max_hp=int(payload.get("max_hp", payload.get("hp", 1)) or 1),
-            base_score=int(payload.get("base_score", 1) or 1),
             theme=str(payload.get("theme", "CONCEPTS") or "CONCEPTS"),
             rarity=str(payload.get("rarity", "COMMON") or "COMMON"),
             epoch=str(payload.get("epoch", "TIMELESS") or "TIMELESS"),
@@ -213,12 +213,18 @@ def apply_serialized_state(game: GameState, state: dict[str, Any]) -> None:
     p1.on_field = _deserialize_cards(list(p1_data.get("field", [])))
     p1.hand = _deserialize_cards(list(p1_data.get("hand", [])))
     p1.discard = _deserialize_cards(list(p1_data.get("discard", [])))
-    p1.deck = [None] * int(p1_data.get("deck_count", 0) or 0)
+    if "deck" in p1_data:
+        p1.deck = _deserialize_cards(list(p1_data.get("deck", [])))
+    else:
+        p1.deck = [None] * int(p1_data.get("deck_count", 0) or 0)
     p1.gold = int(p1_data.get("gold", 0) or 0)
     p2.on_field = _deserialize_cards(list(p2_data.get("field", [])))
     p2.hand = _deserialize_cards(list(p2_data.get("hand", [])))
     p2.discard = _deserialize_cards(list(p2_data.get("discard", [])))
-    p2.deck = [None] * int(p2_data.get("deck_count", 0) or 0)
+    if "deck" in p2_data:
+        p2.deck = _deserialize_cards(list(p2_data.get("deck", [])))
+    else:
+        p2.deck = [None] * int(p2_data.get("deck_count", 0) or 0)
     p2.gold = int(p2_data.get("gold", 0) or 0)
 
     game.turn_number = int(state.get("turn", 1) or 1)
@@ -226,7 +232,7 @@ def apply_serialized_state(game: GameState, state: dict[str, Any]) -> None:
     game.phase = Phase(phase_value) if phase_value in {p.value for p in Phase} else Phase.MAIN
     game.main_action_taken = bool(state.get("main_action_taken", False))
     game.last_event = str(state.get("last_event", "") or "")
-    game.action_log = [str(line) for line in list(state.get("action_log", []))][-5:]
+    game.action_log = [str(line) for line in list(state.get("action_log", []))][-20:]
     active_player = str(state.get("active_player", "p1")).lower()
     game.active_idx = 0 if active_player == "p1" else 1
     _apply_targeting(game, state.get("targeting"))

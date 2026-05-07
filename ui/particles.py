@@ -368,8 +368,6 @@ class ParticleSystem:
             self.shockwave(cx, cy, (180, 230, 255))
         elif event_type in ("VITALITY", "HEAL"):
             self.emit(cx, cy, "bubble", 20)
-        elif event_type == "BOOST":
-            self.emit(cx, cy, "beam", 12)
         elif event_type == "SHIELD":
             self.emit(cx, cy, "ring", 36)
         elif event_type == "POISON":
@@ -387,8 +385,6 @@ class ParticleSystem:
         elif event_type == "GOLD":
             self.emit(cx, cy, "trail", 20)
         elif event_type == "DRAW":
-            self.emit(cx, cy, "vortex", 15, cx=cx, cy=cy)
-        elif event_type in ("DRAIN",):
             self.emit(cx, cy, "vortex", 15, cx=cx, cy=cy)
         elif event_type == "TIMER":
             self.emit(cx, cy, "orbit", 8, cx=cx, cy=cy)

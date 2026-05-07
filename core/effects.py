@@ -27,16 +27,14 @@ EFFECT_LABEL = {
     Effect.HEAL_SELF_2: "Heal 2",
     Effect.DRAW_1: "Draw 1",
     Effect.DAMAGE_ENEMY_2: "Zap 2",
-    Effect.BUFF_SELF_1: "Empower +1 SC",
+    Effect.BUFF_SELF_1: "Vitality 2",
 }
 
 TARGETED_EFFECTS = {
     "DAMAGE",
     "DESTROY",
     "BANISH",
-    "BOOST",
     "HEAL",
-    "DRAIN",
     "BLEEDING",
     "POISON",
     "VITALITY",
@@ -63,12 +61,17 @@ def _legacy_effect_to_runtime(effect: Effect) -> tuple[str, int]:
     if effect == Effect.DRAW_1:
         return "DRAW", 1
     if effect == Effect.BUFF_SELF_1:
-        return "BOOST", 1
+        return "VITALITY", 2
     return "NONE", 0
 
 
 def _normalize_effect_name(effect: str) -> str:
-    return str(effect or "NONE").strip().upper()
+    normalized = str(effect or "NONE").strip().upper()
+    if normalized == "BOOST":
+        return "VITALITY"
+    if normalized == "DRAIN":
+        return "DAMAGE"
+    return normalized
 
 
 def _ensure_statuses(card: "Card") -> None:
@@ -160,9 +163,9 @@ def _debug(game: "GameState", message: str, *, include_state: bool = False) -> N
 
 
 def _target_prompt(effect: str, side: str) -> str:
-    if effect in {"DAMAGE", "DESTROY", "BANISH", "DUEL", "CLASH", "DRAIN", "BLEEDING", "POISON", "LOCK"}:
+    if effect in {"DAMAGE", "DESTROY", "BANISH", "DUEL", "CLASH", "BLEEDING", "POISON", "LOCK"}:
         return "Choose an enemy card."
-    if effect in {"BOOST", "HEAL", "VITALITY", "SHIELD", "IMMUNITY", "VEIL"}:
+    if effect in {"HEAL", "VITALITY", "SHIELD", "IMMUNITY", "VEIL"}:
         return "Choose a friendly card."
     if effect == "REVIVE":
         return "Choose a card to revive from discard."
@@ -196,9 +199,9 @@ def _valid_targets(
 ) -> tuple[list["Card"], str]:
     _ = card
     enemy = _enemy_of(game, owner)
-    if effect in {"DAMAGE", "DESTROY", "BANISH", "DRAIN", "BLEEDING", "POISON", "LOCK", "DUEL", "CLASH"}:
+    if effect in {"DAMAGE", "DESTROY", "BANISH", "BLEEDING", "POISON", "LOCK", "DUEL", "CLASH"}:
         return _filter_targetable(list(enemy.on_field)), "enemy"
-    if effect in {"BOOST", "HEAL", "VITALITY", "SHIELD", "IMMUNITY", "VEIL"}:
+    if effect in {"HEAL", "VITALITY", "SHIELD", "IMMUNITY", "VEIL"}:
         return _filter_targetable(list(owner.on_field)), "friendly"
     if effect == "REVIVE":
         return list(owner.discard), "discard"
@@ -303,15 +306,6 @@ def apply_effect(
             return f"{card.title}: Deal {dealt} damage to {target.title}. {target.title} was destroyed."
         return f"{card.title}: Deal {dealt} damage to {target.title}."
 
-    if effect == "BOOST":
-        if target is None or target not in owner.on_field:
-            return None
-        amount = max(1, value)
-        before = target.base_score
-        target.base_score += amount
-        _debug(game, f"EFFECT BOOST target={target.title} sc {before}->{target.base_score}.")
-        return f"{card.title}: Boost {target.title} by {amount}."
-
     if effect == "HEAL":
         if target is None or target not in owner.on_field:
             return None
@@ -319,21 +313,6 @@ def apply_effect(
         target.hp = max(1, int(target.max_hp))
         _debug(game, f"EFFECT HEAL target={target.title} hp {before}->{target.hp}.")
         return f"{card.title}: Heal {target.title} to full HP."
-
-    if effect == "DRAIN":
-        if target is None or target not in enemy.on_field:
-            return None
-        amount = min(max(1, value), max(0, int(target.base_score)))
-        before_target = target.base_score
-        before_source = card.base_score
-        target.base_score -= amount
-        card.base_score += amount
-        _debug(
-            game,
-            f"EFFECT DRAIN target={target.title} sc {before_target}->{target.base_score}; "
-            f"source={card.title} sc {before_source}->{card.base_score}.",
-        )
-        return f"{card.title}: Drain {amount} from {target.title}."
 
     if effect == "BLEEDING":
         if target is None or target not in enemy.on_field:
@@ -435,8 +414,8 @@ def apply_effect(
         for _ in range(max(0, value)):
             if not owner.deck:
                 break
-            owner.hand.append(owner.deck.pop(0))
-            drew += 1
+            if owner.draw_card() is not None:
+                drew += 1
         if drew == 0:
             return None
         return f"{card.title}: Draw {drew} cards."

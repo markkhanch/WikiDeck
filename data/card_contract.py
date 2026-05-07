@@ -41,9 +41,7 @@ ALLOWED_EFFECTS = {
     "DAMAGE",
     "DESTROY",
     "BANISH",
-    "BOOST",
     "HEAL",
-    "DRAIN",
     "BLEEDING",
     "POISON",
     "VITALITY",
@@ -66,9 +64,7 @@ GAMEPLAY_SUPPORTED_EFFECTS = {
     "DAMAGE",
     "DESTROY",
     "BANISH",
-    "BOOST",
     "HEAL",
-    "DRAIN",
     "BLEEDING",
     "POISON",
     "VITALITY",
@@ -89,8 +85,6 @@ GAMEPLAY_SUPPORTED_TRIGGERS = ALLOWED_TRIGGERS
 
 NUMBERED_EFFECTS = {
     "DAMAGE",
-    "BOOST",
-    "DRAIN",
     "BLEEDING",
     "POISON",
     "VITALITY",
@@ -126,9 +120,7 @@ FORBIDDEN_WORDS = {
 
 EFFECT_KEYWORDS = {
     "DAMAGE": {"damage", "deal"},
-    "BOOST": {"boost"},
     "HEAL": {"heal", "restore"},
-    "DRAIN": {"drain"},
     "DRAW": {"draw"},
     "GOLD": {"gold", "gain"},
     "BLEEDING": {"bleeding"},

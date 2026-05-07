@@ -6,7 +6,7 @@ Stage 3 MVP:
  - MAIN is mandatory: must PLAY or DISCARD before End Turn activates
    (relaxed only if the active player's hand is empty)
  - Match ends when BOTH players have empty hand AND empty deck (GDD §5.1)
- - No combos, no triggers, no HP/damage yet — cards just stack on the field
+ - No score multipliers — winner is determined by total field HP
 """
 from dataclasses import dataclass, field
 from enum import Enum
@@ -14,10 +14,11 @@ import time
 from typing import Any, Callable, List
 
 from core.card import Card
-from core.combos import active_combos, multiplier
 from core.effects import _consume_protection, apply_effect
 from core.player import Player
 from core.triggers import apply_status_ticks, fire_triggers, normalize_trigger_name
+
+ACTION_LOG_LIMIT = 20
 
 
 class Phase(Enum):
@@ -110,7 +111,7 @@ class GameState:
         trigger = str(getattr(card, "ability_trigger", "NO ABILITY") or "NO ABILITY")
         return (
             f"{card.title}(HP={card.hp}/{max(1, int(getattr(card, 'max_hp', card.hp)))},"
-            f"SC={card.base_score},eff={effect},trg={trigger},st=[{statuses}],sil={silence})"
+            f"eff={effect},trg={trigger},st=[{statuses}],sil={silence})"
         )
 
     def _format_player_snapshot(self, player: Player) -> str:
@@ -249,8 +250,8 @@ class GameState:
             return
         self.last_event = text
         self.action_log.append(text)
-        if len(self.action_log) > 5:
-            self.action_log = self.action_log[-5:]
+        if len(self.action_log) > ACTION_LOG_LIMIT:
+            self.action_log = self.action_log[-ACTION_LOG_LIMIT:]
         self.debug(f"EVENT: {text}", include_state=True)
 
     def start_turn(self) -> None:
@@ -311,10 +312,10 @@ class GameState:
         return False
 
     def try_attack(self, attacker: Card, target: Card) -> bool:
-        """Attack an enemy field card. Damage = attacker.base_score.
+        """Attack an enemy field card with fixed damage.
 
         MVP rule (not in GDD): active player's on-field card can attack once per turn,
-        dealing damage equal to its base_score. This will be replaced by the real
+        dealing fixed damage. This will be replaced by the real
         trigger-driven combat model once abilities are implemented.
         """
         if self.phase != Phase.MAIN or self.main_action_taken:
@@ -329,7 +330,7 @@ class GameState:
             self.debug(f"ATTACK blocked: target {target.title} not on opponent field.")
             return False
 
-        raw_damage = max(0, int(attacker.base_score))
+        raw_damage = 1
         dealt = _consume_protection(target, raw_damage)
         before_hp = target.hp
         target.hp -= dealt
@@ -502,55 +503,40 @@ class GameState:
         return all(len(p.hand) == 0 and len(p.deck) == 0 for p in self.players)
 
     def base_sum(self, player: Player) -> int:
-        """Raw Σ(base_score) over living field cards — no multiplier."""
-        return sum(c.base_score for c in player.on_field)
+        """Raw Σ(HP) over living field cards."""
+        return sum(max(0, int(c.hp)) for c in player.on_field)
 
     def graveyard_eligible_count(self, player: Player) -> int:
         return sum(1 for card in player.discard if bool(getattr(card, "graveyard_eligible", False)))
 
-    def active_combos_for(self, player: Player) -> list[tuple[str, float]]:
-        return active_combos(
-            player.on_field,
-            graveyard_eligible_count=self.graveyard_eligible_count(player),
-        )
-
-    def multiplier_for(self, player: Player) -> float:
-        return multiplier(
-            player.on_field,
-            graveyard_eligible_count=self.graveyard_eligible_count(player),
-        )
-
     def score_for(self, player: Player) -> int:
-        """Final score = floor(base_sum × multiplier) (GDD §5.2)."""
-        return int(self.base_sum(player) * self.multiplier_for(player))
+        """Final score from field HP total."""
+        return self.base_sum(player)
 
     def _log_game_over_summary(self) -> None:
         p1, p2 = self.players
 
-        def _field_line(player: Player) -> tuple[str, int, float, int]:
+        def _field_line(player: Player) -> tuple[str, int]:
             if player.on_field:
                 cards = ", ".join(
-                    f"{c.title} HP={c.hp} SC={c.base_score}"
+                    f"{c.title} HP={c.hp}"
                     for c in player.on_field
                 )
             else:
                 cards = "(empty)"
-            total = self.base_sum(player)
-            mult = self.multiplier_for(player)
             score = self.score_for(player)
-            return cards, total, mult, score
+            return cards, score
 
-        p1_cards, p1_total, p1_mult, p1_score = _field_line(p1)
-        p2_cards, p2_total, p2_mult, p2_score = _field_line(p2)
+        p1_cards, p1_score = _field_line(p1)
+        p2_cards, p2_score = _field_line(p2)
 
         self.plain_log("GAME OVER")
         self.plain_log(
-            f"{p1.name} field: {p1_cards} -> total={p1_total} × {p1_mult:.1f} = {p1_score}"
+            f"{p1.name} field: {p1_cards} -> score={p1_score}"
         )
         self.plain_log(
-            f"{p2.name} field: {p2_cards} -> total={p2_total} × {p2_mult:.1f} = {p2_score}"
+            f"{p2.name} field: {p2_cards} -> score={p2_score}"
         )
-        self.plain_log(f"Multipliers: {p1.name}={p1_mult:.1f}, {p2.name}={p2_mult:.1f}")
         if p1_score > p2_score:
             self.plain_log(f"WINNER: {p1.name} ({p1_score} > {p2_score})")
         elif p2_score > p1_score:

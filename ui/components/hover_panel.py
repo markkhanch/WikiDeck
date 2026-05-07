@@ -9,6 +9,7 @@ Renders a side panel (right edge of the screen) with:
 Kept as a stateless draw-function — the owner decides when to call it based
 on mouse position and visibility rules (e.g. hide the opponent's hand).
 """
+import re
 from typing import List
 
 import pygame
@@ -60,7 +61,6 @@ TERM_GLOSSARY = {
     "ORDER": "ORDER can be activated manually once per turn.",
     "ABILITY": "Ability is the special card action text linked to trigger and effect.",
     "HP": "In card games, HP is a card's health. When it reaches 0, the card is defeated.",
-    "SCORE": "Score (SC) is the card's points contribution while on the field.",
     "CARDS": "Cards are units in your hand, deck, field, or discard pile.",
     "HAND": "Hand is the set of cards you can currently play.",
     "FIELD": "Field is where active cards stay and apply effects.",
@@ -72,8 +72,6 @@ TERM_GLOSSARY = {
     "GOLD": "Gold is a resource used for purchases or effects.",
     "DESTROY": "Destroy removes an enemy card from the battlefield.",
     "BANISH": "Banish removes a card from the game without sending it to discard.",
-    "BOOST": "Boost increases a card's base score.",
-    "DRAIN": "Drain lowers enemy score and transfers that amount to the source card.",
     "REVIVE": "Revive returns a defeated card to the field.",
     "BLEEDING": "BLEEDING deals 1 damage at end of turn and loses one stack.",
     "VITALITY": "VITALITY heals 1 HP at end of turn and loses one stack.",
@@ -88,87 +86,102 @@ TERM_GLOSSARY = {
 
 TERM_ORDER = [
     "DEPLOY", "DEATHWISH", "ORDER", "ABILITY",
-    "HP", "SCORE",
+    "HP",
     "CARDS", "HAND", "FIELD", "DISCARD PILE",
-    "DAMAGE", "BOOST", "HEAL", "DRAIN", "DRAW", "DISCARD", "GOLD",
+    "DAMAGE", "HEAL", "DRAW", "DISCARD", "GOLD",
     "DESTROY", "BANISH", "REVIVE", "DUEL", "CLASH",
     "BLEEDING", "VITALITY", "POISON", "SHIELD", "IMMUNITY", "LOCK", "VEIL",
 ]
 
 
 def _ability_terms(card: Card) -> List[str]:
-    sources = [card.ability_text or "", card.ability_trigger or ""]
-    if getattr(card, "statuses", None):
-        sources.append(" ".join(sorted(card.statuses)))
+    visible_sources: list[str] = []
+
+    trigger = str(card.ability_trigger or "").strip().upper()
+    ability_text = str(card.ability_text or "").strip()
+    if ability_text:
+        prefix = f"{trigger}: " if trigger else ""
+        visible_sources.append(f"{prefix}{ability_text}")
+    else:
+        for label, effect in (("DEPLOY", card.on_play), ("DEATHWISH", card.on_death)):
+            if effect in (None, Effect.NONE):
+                continue
+            pretty = str(EFFECT_LABEL.get(effect, getattr(effect, "value", str(effect))))
+            visible_sources.append(f"{label}: {pretty}")
+
+    raw_statuses = getattr(card, "statuses", {}) or {}
+    if isinstance(raw_statuses, dict):
+        status_tokens: list[str] = []
+        for name in sorted(raw_statuses):
+            value = raw_statuses[name]
+            if isinstance(value, bool):
+                if value:
+                    status_tokens.append(str(name))
+            else:
+                count = int(value)
+                status_tokens.append(f"{name}:{count}" if count > 1 else str(name))
+    else:
+        status_tokens = sorted(str(s) for s in raw_statuses)
     if getattr(card, "silenced_turns", 0) > 0:
-        sources.append("silenced")
-    if card.on_play not in (None, Effect.NONE):
-        sources.append("DEPLOY")
-        sources.append(str(EFFECT_LABEL.get(card.on_play, getattr(card.on_play, "value", ""))))
-    if card.on_death not in (None, Effect.NONE):
-        sources.append("DEATHWISH")
-        sources.append(str(EFFECT_LABEL.get(card.on_death, getattr(card.on_death, "value", ""))))
-    text = " ".join(sources).lower().strip()
+        status_tokens.append("SILENCED")
+    if status_tokens:
+        visible_sources.append(" ".join(status_tokens))
+
+    text = " ".join(visible_sources).lower().strip()
     if not text:
         return []
     terms = set()
-    if "deploy" in text:
+    if re.search(r"\bdeploy\b", text):
         terms.add("DEPLOY")
-    if "deathwish" in text:
+    if re.search(r"\bdeathwish\b", text):
         terms.add("DEATHWISH")
-    if "order" in text:
+    if re.search(r"\border\b", text):
         terms.add("ORDER")
-    if "ability" in text:
+    if re.search(r"\bability\b", text):
         terms.add("ABILITY")
-    if "hp" in text:
+    if re.search(r"\bhp\b", text):
         terms.add("HP")
-    if "score" in text or " sc " in f" {text} ":
-        terms.add("SCORE")
-    if "card" in text:
+    if re.search(r"\bcards\b", text):
         terms.add("CARDS")
-    if "hand" in text:
+    if re.search(r"\bhand\b", text):
         terms.add("HAND")
-    if "field" in text:
+    if re.search(r"\bfield\b", text):
         terms.add("FIELD")
-    if "discard pile" in text:
+    if re.search(r"\bdiscard pile\b", text):
         terms.add("DISCARD PILE")
-    if "damage" in text or "deal " in text:
+    if re.search(r"\bdamage\b", text) or re.search(r"\bdeal\b", text):
         terms.add("DAMAGE")
-    if "heal" in text or "restore" in text:
+    if re.search(r"\bheal\b", text) or re.search(r"\brestore\b", text):
         terms.add("HEAL")
-    if "draw" in text:
+    if re.search(r"\bdraw\b", text):
         terms.add("DRAW")
-    if "discard" in text:
+    if re.search(r"\bdiscard\b", text):
         terms.add("DISCARD")
-    if "gold" in text:
+    if re.search(r"\bgold\b", text):
         terms.add("GOLD")
-    if "destroy" in text:
+    if re.search(r"\bdestroy\b", text):
         terms.add("DESTROY")
-    if "banish" in text:
+    if re.search(r"\bbanish\b", text):
         terms.add("BANISH")
-    if "boost" in text:
-        terms.add("BOOST")
-    if "drain" in text:
-        terms.add("DRAIN")
-    if "return" in text and ("discard" in text or "field" in text):
+    if re.search(r"\breturn\b", text) and (re.search(r"\bdiscard\b", text) or re.search(r"\bfield\b", text)):
         terms.add("REVIVE")
-    if "bleeding" in text:
+    if re.search(r"\bbleeding\b", text):
         terms.add("BLEEDING")
-    if "vitality" in text:
+    if re.search(r"\bvitality\b", text):
         terms.add("VITALITY")
-    if "poison" in text:
+    if re.search(r"\bpoison\b", text):
         terms.add("POISON")
-    if "shield" in text:
+    if re.search(r"\bshield\b", text):
         terms.add("SHIELD")
-    if "immunity" in text:
+    if re.search(r"\bimmunity\b", text):
         terms.add("IMMUNITY")
-    if "lock" in text:
+    if re.search(r"\block\b", text):
         terms.add("LOCK")
-    if "veil" in text:
+    if re.search(r"\bveil\b", text):
         terms.add("VEIL")
-    if "duel" in text:
+    if re.search(r"\bduel\b", text):
         terms.add("DUEL")
-    if "clash" in text:
+    if re.search(r"\bclash\b", text):
         terms.add("CLASH")
     return [term for term in TERM_ORDER if term in terms]
 
@@ -284,7 +297,7 @@ def draw_hover_panel(
         cy += surf.get_height() + 2
     cy += 4
 
-    # Badges: theme + rarity + HP/SC
+    # Badges: theme + rarity + HP
     badge_font = fonts["small"]
     theme_color = THEME_COLORS.get(card.theme, MUTED_TEXT)
     rarity_color = RARITY_COLORS.get(card.rarity, MUTED_TEXT)
@@ -294,7 +307,6 @@ def draw_hover_panel(
         (card.theme, theme_color),
         (card.rarity, rarity_color),
         (f"HP {card.hp}", NEON_GREEN),
-        (f"SC {card.base_score}", GOLD),
     ):
         bw, bh = _draw_badge(screen, badge_font, text, color, (bx, cy))
         bx += bw + 4

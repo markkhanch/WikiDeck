@@ -26,10 +26,12 @@ from config import (
     MUTED_TEXT,
     GOLD,
 )
+from core.sound_player import get_sound_player
 from data.settings_service import get_bool, get_int, target_fps
 from core.card import Card
 from core.player import Player
 from core.game_state import GameState, Phase
+from ui.particles import draw_animation_system
 from network.protocol import (
     CONNECTION_STATUS,
     DISCARD_CARD,
@@ -863,6 +865,16 @@ def _event_rects_for_text(game: GameState, event_text: str) -> tuple[pygame.Rect
     return _fallback_event_rect(), None
 
 
+# Effect sound map
+EFFECT_SOUND_MAP = {
+    "DAMAGE": "punch.mp3",
+    "BLEEDING": "blood.mp3",
+    "SHIELD": "shield.mp3",
+    "REVIVE": "death.mp3",
+    "DEATHWISH": "death.mp3",
+}
+
+
 def _emit_particles_for_event(event_text, source_rect, target_rect=None):
     cx = source_rect.centerx
     cy = source_rect.centery
@@ -890,6 +902,12 @@ def _emit_particles_for_event(event_text, source_rect, target_rect=None):
     ]:
         if keyword in text:
             particle_system.trigger(keyword, cx, cy, tx, ty)
+            
+            # Play effect sound if available
+            if keyword in EFFECT_SOUND_MAP:
+                sound_player = get_sound_player()
+                sound_player.play_sfx(EFFECT_SOUND_MAP[keyword])
+            
             break
 
 
@@ -1067,9 +1085,23 @@ def run_match(
     detail_modal_card: Card | None = None
     if network_mode and network_client is not None:
         network_client.is_my_turn = False
+    
+    # Track hand sizes and cards to detect and animate card draws
+    prev_hand_sizes = {
+        game.players[0].name: len(game.players[0].hand),
+        game.players[1].name: len(game.players[1].hand),
+    }
+    prev_hand_cards = {
+        game.players[0].name: list(game.players[0].hand),
+        game.players[1].name: list(game.players[1].hand),
+    }
+    sound_player = get_sound_player()
+    dt = 0.0  # Frame time
 
     while True:
-        clock.tick(target_fps())
+        dt = clock.tick(target_fps()) / 1000.0  # Convert milliseconds to seconds
+        draw_animation_system.update(dt)
+        
         if network_mode and network_client is not None:
             my_role, network_status, state_changed, disconnected, has_received_state = _consume_network_messages(
                 game,
@@ -1093,6 +1125,40 @@ def run_match(
         controlling_player = my_player if my_player is not None else active
         is_my_turn = (not network_mode) or bool(getattr(network_client, "is_my_turn", False))
         can_interact = (not network_mode) or (my_player is not None and is_my_turn)
+        
+        # Check if cards were drawn and create animations
+        for player_idx, player in enumerate(game.players):
+            current_hand = list(player.hand)
+            current_hand_size = len(current_hand)
+            prev_hand_size = prev_hand_sizes.get(player.name, 0)
+            
+            if current_hand_size > prev_hand_size:
+                # Card was drawn! Find the new card
+                sound_player.play_sfx("Taking playing card.mp3")
+                
+                # Find which card is new
+                prev_cards = prev_hand_cards.get(player.name, [])
+                for card in current_hand:
+                    if card not in prev_cards:
+                        # This is a new card - animate it!
+                        # Get deck position
+                        _, deck_rect = _pile_rects(player_idx)
+                        deck_pos = (deck_rect.centerx, deck_rect.centery)
+                        
+                        # Get hand position (where the card currently is)
+                        hand_pos = (card.rect.centerx, card.rect.centery)
+                        
+                        # Create animation from deck to hand position
+                        draw_animation_system.add_draw_animation(
+                            deck_pos[0], deck_pos[1],
+                            hand_pos[0], hand_pos[1],
+                            card.image if hasattr(card, 'image') and card.image else None
+                        )
+                        break
+            
+            prev_hand_sizes[player.name] = current_hand_size
+            prev_hand_cards[player.name] = current_hand
+        
         if deck_modal_open and (
             deck_modal_owner_idx is None
             or not _can_open_deck_for_player(
@@ -1593,5 +1659,8 @@ def run_match(
 
         if game.phase == Phase.GAME_OVER:
             _draw_game_over(screen, game, fonts)
+        
+        # Draw card draw animations
+        draw_animation_system.draw(screen)
 
         pygame.display.flip()

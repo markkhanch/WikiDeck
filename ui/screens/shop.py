@@ -20,6 +20,7 @@ from config import (
 )
 from core.card import Card
 from core.card_factory import build_card_from_spec
+from core.sound_player import play_click
 from data.booster import (
     PACK_DISPLAY_NAMES,
     buy_single_card,
@@ -168,6 +169,7 @@ def run_shop(
             if event.type == pygame.MOUSEWHEEL and active_tab == "my_packs" and not (reveal_cards or reveal_queue):
                 my_packs_scroll = max(0, min(my_packs_max_scroll, my_packs_scroll - event.y * 48))
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                play_click()
                 if reveal_cards or reveal_queue:
                     reveal_cards.clear()
                     reveal_queue.clear()
@@ -181,14 +183,17 @@ def run_shop(
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if reveal_cards or reveal_queue:
                     if reveal_close_rect.collidepoint(mx, my):
+                        play_click()
                         reveal_cards.clear()
                         reveal_queue.clear()
                     continue
 
                 if close_rect.collidepoint(mx, my):
+                    play_click()
                     return "menu"
                 for key, rect in tab_rects.items():
                     if rect.collidepoint(mx, my):
+                        play_click()
                         active_tab = key
                         status_line = ""
                         break
@@ -196,10 +201,13 @@ def run_shop(
                 if active_tab == "boosters":
                     for pack_type, controls in pack_controls.items():
                         if controls["minus"].collidepoint(mx, my):
+                            play_click()
                             pack_counts[pack_type] = max(1, pack_counts[pack_type] - 1)
                         elif controls["plus"].collidepoint(mx, my):
+                            play_click()
                             pack_counts[pack_type] = min(10, pack_counts[pack_type] + 1)
                         elif controls["buy"].collidepoint(mx, my):
+                            play_click()
                             amount = pack_counts[pack_type]
                             for _ in range(amount):
                                 purchase_pack(pack_type)
@@ -209,6 +217,7 @@ def run_shop(
                 elif active_tab == "singles":
                     for single_id, rect in single_buy_rects.items():
                         if rect.collidepoint(mx, my):
+                            play_click()
                             bought = buy_single_card(single_id)
                             if bought is not None:
                                 status_line = f"Bought {bought['title']} ({bought['rarity']})."

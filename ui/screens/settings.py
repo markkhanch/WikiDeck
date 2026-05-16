@@ -1,6 +1,7 @@
 import pygame
 
 from config import SCREEN_HEIGHT, SCREEN_WIDTH, BG_MID, MUTED_TEXT, NEON_BLUE, NEON_GREEN, WHITE_TEXT
+from core.sound_player import play_click
 from data.settings_service import (
     categories,
     definitions_by_category,
@@ -126,6 +127,7 @@ def run_settings(
                 scroll = max(0, min(max_scroll, scroll - event.y * 34))
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if close_rect.collidepoint(mx, my):
+                    play_click()
                     return "menu"
                 if editing_key is not None:
                     editing_key = None
@@ -134,15 +136,18 @@ def run_settings(
                     continue
                 for cat, rect in tab_rects.items():
                     if rect.collidepoint(mx, my):
+                        play_click()
                         active_tab = cat
                         scroll = 0
                         status_line = ""
                         break
                 if reset_all_rect.collidepoint(mx, my):
+                    play_click()
                     reset_to_defaults()
                     status_line = "All settings reset to defaults."
                     continue
                 if reset_tab_rect.collidepoint(mx, my):
+                    play_click()
                     reset_category(active_tab)
                     status_line = f"{active_tab} reset to defaults."
                     continue

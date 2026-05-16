@@ -1,6 +1,7 @@
 import pygame
 
 from config import SCREEN_WIDTH, SCREEN_HEIGHT, CARD_WIDTH, CARD_HEIGHT, MUTED_TEXT, GOLD
+from core.sound_player import play_click
 from data.settings_service import target_fps
 from core.card import Card
 from core.card_factory import build_card_from_spec
@@ -51,8 +52,10 @@ def run_collection(
             if event.type == pygame.QUIT:
                 return None
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                play_click()
                 return "menu"
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and close_rect.collidepoint(mx, my):
+                play_click()
                 return "menu"
             if event.type == pygame.MOUSEWHEEL and list_rect.collidepoint(mx, my):
                 scroll = max(0, scroll - event.y * 40)

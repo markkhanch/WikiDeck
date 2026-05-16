@@ -1,6 +1,7 @@
 import pygame
 
 from config import SCREEN_WIDTH
+from core.sound_player import play_click
 from data.settings_service import target_fps
 from ui.screens.common import (
     draw_background,
@@ -45,12 +46,15 @@ def run_play_menu(
             if event.type == pygame.QUIT:
                 return None
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                play_click()
                 return "menu"
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if close_rect.collidepoint(mx, my):
+                    play_click()
                     return "menu"
                 for rect, key in buttons:
                     if rect.collidepoint(mx, my):
+                        play_click()
                         if key == "match":
                             if deck_size < deck_min:
                                 status_msg = f"Deck too small: {deck_size}/{deck_min}"

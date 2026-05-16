@@ -4,6 +4,7 @@ import ipaddress
 import pygame
 
 from config import SCREEN_WIDTH
+from core.sound_player import play_click
 from data.settings_service import network_ports, target_fps
 from network.client import NetworkClient
 from network.protocol import CONNECTION_STATUS, ERROR, GAME_STATE, ROLE
@@ -119,9 +120,11 @@ def run_host_game(screen: pygame.Surface, fonts: dict, background: pygame.Surfac
                 _cleanup(client, server_handle)
                 return None
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                play_click()
                 _cleanup(client, server_handle)
                 return "menu"
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and close_rect.collidepoint(mx, my):
+                play_click()
                 _cleanup(client, server_handle)
                 return "menu"
 
@@ -192,14 +195,17 @@ def run_join_game(screen: pygame.Surface, fonts: dict, background: pygame.Surfac
                 _cleanup(client, None)
                 return None
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                play_click()
                 _cleanup(client, None)
                 return "menu"
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if close_rect.collidepoint(mx, my):
+                    play_click()
                     _cleanup(client, None)
                     return "menu"
                 typing_active = input_rect.collidepoint(mx, my)
                 if connect_rect.collidepoint(mx, my):
+                    play_click()
                     if client is not None:
                         client.close()
                     host, ports = _parse_host_value(host_text)

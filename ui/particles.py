@@ -413,3 +413,110 @@ class ParticleSystem:
 
 
 particle_system = ParticleSystem()
+
+
+class CardDrawAnimation:
+    """Animate a card being drawn from deck to hand"""
+    
+    def __init__(self, start_x: float, start_y: float, end_x: float, end_y: float, card_surface: 'pygame.Surface'):
+        """
+        Args:
+            start_x, start_y: Deck position
+            end_x, end_y: Hand position
+            card_surface: The card image to animate
+        """
+        self.start_x = start_x
+        self.start_y = start_y
+        self.end_x = end_x
+        self.end_y = end_y
+        self.card_surface = card_surface
+        self.progress = 0.0  # 0.0 to 1.0
+        self.duration = 0.4  # seconds
+        self.elapsed = 0.0
+        self.is_done = False
+    
+    def update(self, dt: float) -> None:
+        """Update animation. dt is frame time in seconds."""
+        if self.is_done:
+            return
+        self.elapsed += dt
+        self.progress = min(1.0, self.elapsed / self.duration)
+        
+        # Easing: ease-out cubic (starts fast, ends slow)
+        t = self.progress
+        eased = 1.0 - (1.0 - t) ** 3
+        self.progress = eased
+        
+        if self.elapsed >= self.duration:
+            self.is_done = True
+    
+    def get_position(self) -> tuple[float, float]:
+        """Get current card position using easing"""
+        x = self.start_x + (self.end_x - self.start_x) * self.progress
+        y = self.start_y + (self.end_y - self.start_y) * self.progress
+        return x, y
+    
+    def get_scale(self) -> float:
+        """Card scales up slightly as it approaches hand"""
+        return 1.0 + self.progress * 0.1  # grows to 1.1x size
+    
+    def get_rotation(self) -> float:
+        """Card rotates slightly during draw"""
+        import math
+        return math.sin(self.progress * math.pi) * 5.0  # Max 5 degrees
+    
+    def draw(self, surface: 'pygame.Surface') -> None:
+        """Draw the animated card"""
+        if self.is_done or self.card_surface is None:
+            return
+        
+        import pygame
+        import math
+        
+        x, y = self.get_position()
+        scale = self.get_scale()
+        rotation = self.get_rotation()
+        
+        # Scale the card
+        if scale != 1.0:
+            new_width = int(self.card_surface.get_width() * scale)
+            new_height = int(self.card_surface.get_height() * scale)
+            scaled = pygame.transform.scale(self.card_surface, (new_width, new_height))
+        else:
+            scaled = self.card_surface
+        
+        # Rotate the card
+        if rotation != 0.0:
+            rotated = pygame.transform.rotate(scaled, rotation)
+        else:
+            rotated = scaled
+        
+        # Draw at position
+        rect = rotated.get_rect(center=(x, y))
+        surface.blit(rotated, rect)
+
+
+class CardDrawAnimationSystem:
+    """Manages multiple card draw animations"""
+    
+    def __init__(self):
+        self.animations: list[CardDrawAnimation] = []
+    
+    def add_draw_animation(self, start_x: float, start_y: float, end_x: float, end_y: float, card_surface: 'pygame.Surface') -> None:
+        """Add a new card draw animation"""
+        self.animations.append(CardDrawAnimation(start_x, start_y, end_x, end_y, card_surface))
+    
+    def update(self, dt: float) -> None:
+        """Update all animations"""
+        for anim in self.animations:
+            anim.update(dt)
+        # Remove finished animations
+        self.animations = [a for a in self.animations if not a.is_done]
+    
+    def draw(self, surface: 'pygame.Surface') -> None:
+        """Draw all animations"""
+        for anim in self.animations:
+            anim.draw(surface)
+
+
+draw_animation_system = CardDrawAnimationSystem()

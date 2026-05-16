@@ -1,6 +1,7 @@
 import pygame
 
 from config import SCREEN_WIDTH, SCREEN_HEIGHT, MUTED_TEXT, GOLD, NEON_BLUE, BG_MID
+from core.sound_player import play_click
 from data.settings_service import target_fps
 from ui.screens.common import (
     draw_background,
@@ -31,8 +32,10 @@ def run_profile(
             if event.type == pygame.QUIT:
                 return None
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                play_click()
                 return "menu"
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and close_rect.collidepoint(mx, my):
+                play_click()
                 return "menu"
 
         draw_background(screen, background)

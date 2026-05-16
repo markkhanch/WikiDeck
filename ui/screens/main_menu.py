@@ -1,6 +1,7 @@
 import pygame
 
 from config import SCREEN_WIDTH, SCREEN_HEIGHT
+from core.sound_player import play_click
 from data.settings_service import target_fps
 from ui.screens.common import draw_background, draw_title, draw_button, draw_close_button, close_button_rect
 
@@ -44,11 +45,14 @@ def run_main_menu(
                 return None
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if close_rect.collidepoint(mx, my):
+                    play_click()
                     return None
                 for rect, key in buttons:
                     if rect.collidepoint(mx, my):
+                        play_click()
                         return key
                 if settings_rect.collidepoint(mx, my):
+                    play_click()
                     return "settings"
 
         draw_background(screen, background)

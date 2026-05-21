@@ -149,7 +149,6 @@ ABILITY_COSTS = {
     "CLASH": 1.7,
     "DRAW": 1.3,
     "DISCARD": 1.2,
-    "GOLD": 1.2,
     "REVIVE": 1.7,
 }
 
@@ -170,7 +169,6 @@ VALID_EFFECTS = {
     "CLASH",
     "DRAW",
     "DISCARD",
-    "GOLD",
     "NONE",
 }
 
@@ -209,7 +207,6 @@ EFFECT_TYPE_TO_EFFECT = {
     "DRAW": Effect.DRAW_1,
     "DISCARD": Effect.NONE,
     "REVIVE": Effect.NONE,
-    "GOLD": Effect.DRAW_1,
     "NONE": Effect.NONE,
 }
 
@@ -653,19 +650,19 @@ def _effect_candidates(hits: dict[str, int], theme: str = "LIVING") -> list[str]
     if hits.get("assassin", 0) or hits.get("collapse", 0):
         candidates.extend(["BLEEDING", "POISON", "DESTROY"])
     if hits.get("education", 0):
-        candidates.extend(["DRAW", "VITALITY", "GOLD"])
+        candidates.extend(["DRAW", "VITALITY"])
     if hits.get("culture", 0):
         candidates.extend(["VITALITY", "SHIELD", "DRAW"])
     if hits.get("religion", 0):
         candidates.extend(["REVIVE", "VITALITY", "HEAL"])
     if hits.get("politics", 0) or hits.get("economy", 0):
-        candidates.extend(["LOCK", "GOLD", "BANISH"])
+        candidates.extend(["LOCK", "BANISH"])
     if hits.get("fortress", 0):
         candidates.extend(["SHIELD", "IMMUNITY", "VEIL"])
 
     if not candidates:
         if theme == "LIVING":
-            candidates = ["DRAW", "VITALITY", "HEAL", "GOLD", "SHIELD"]
+            candidates = ["DRAW", "VITALITY", "HEAL", "SHIELD"]
         else:
             candidates = ["VITALITY"]
 
@@ -681,7 +678,7 @@ def _trigger_candidates(effect_type: str) -> list[str]:
         return ["DEPLOY", "DEATHBLOW"]
     if effect_type in {"HEAL", "VITALITY", "SHIELD", "IMMUNITY", "VEIL", "REVIVE"}:
         return ["DEPLOY", "DEATHWISH", "ON DEATH:ally"]
-    if effect_type in {"DRAW", "DISCARD", "GOLD"}:
+    if effect_type in {"DRAW", "DISCARD"}:
         return ["DEPLOY", "ORDER", "DEATHBLOW"]
     return ["DEPLOY"]
 
@@ -705,7 +702,7 @@ def _choose_with_diversity(
 
 
 def _ability_value(effect_type: str, rarity: str) -> int:
-    if effect_type in {"DAMAGE", "BLEEDING", "VITALITY", "DRAW", "DISCARD", "GOLD"}:
+    if effect_type in {"DAMAGE", "BLEEDING", "VITALITY", "DRAW", "DISCARD"}:
         return 1 if rarity == "COMMON" else 2
     if effect_type in {"POISON", "DESTROY", "BANISH", "HEAL", "SHIELD", "IMMUNITY", "LOCK", "VEIL", "DOOMED", "DUEL", "CLASH", "REVIVE", "NONE"}:
         return 0
@@ -745,8 +742,6 @@ def _ability_text_template(effect_type: str, value: int) -> str:
         return f"Discard {value} cards from the enemy hand."
     if effect_type == "REVIVE":
         return "Return one card from your discard pile to the field."
-    if effect_type == "GOLD":
-        return f"Gain {value} gold."
     return "Give this card Vitality for 1 turn."
 
 
@@ -822,7 +817,7 @@ def build_system_prompt() -> str:
         "- Must contain ONLY mechanic and target (no explanations, no flavor)\n"
         "- One verb, one target, period\n"
         "- Only use these game terms: HP, BLEEDING, VITALITY, POISON,\n"
-        "  SHIELD, IMMUNITY, LOCK, VEIL, gold, cards\n"
+        "  SHIELD, IMMUNITY, LOCK, VEIL, cards\n"
         "FORBIDDEN words - never use these in ability_text:\n"
         "attack, defense, morale, faith, influence, power, strength, mana\n"
         "- If trigger is DEATHWISH, ability_text MUST start with: \"Deathwish: ...\"\n"
@@ -890,7 +885,7 @@ Ability complexity reference for {rarity} cards (from a balanced card game):
 {few_shot}
 Use these as inspiration for complexity level only - do NOT copy them literally.
 Write ability_text using only WikiDeck terms: HP, BLEEDING, VITALITY,
-POISON, SHIELD, IMMUNITY, LOCK, VEIL, gold, cards.
+POISON, SHIELD, IMMUNITY, LOCK, VEIL, cards.
 """
 
     return f"""Person: {spec['title']}
@@ -907,7 +902,6 @@ VITALITY: "Give this card Vitality for 2 turns."
 BLEEDING: "Give an enemy card Bleeding for 3 turns."
 HEAL: "Heal this card."
 DRAW: "Draw 2 cards."
-GOLD: "Gain 2 gold."
 DESTROY: "Destroy one enemy card."
 BANISH: "Banish one enemy card."
 SHIELD: "Give this card Shield."

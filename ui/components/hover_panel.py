@@ -29,6 +29,7 @@ from config import (
 )
 from core.card import Card
 from core.effects import Effect, EFFECT_LABEL
+from ui.effects import draw_drop_shadow, draw_glow
 
 
 PANEL_W = 320
@@ -88,7 +89,7 @@ TERM_ORDER = [
     "DEPLOY", "DEATHWISH", "ORDER", "ABILITY",
     "HP",
     "CARDS", "HAND", "FIELD", "DISCARD PILE",
-    "DAMAGE", "HEAL", "DRAW", "DISCARD", "GOLD",
+    "DAMAGE", "HEAL", "DRAW", "DISCARD",
     "DESTROY", "BANISH", "REVIVE", "DUEL", "CLASH",
     "BLEEDING", "VITALITY", "POISON", "SHIELD", "IMMUNITY", "LOCK", "VEIL",
 ]
@@ -157,8 +158,6 @@ def _ability_terms(card: Card) -> List[str]:
         terms.add("DRAW")
     if re.search(r"\bdiscard\b", text):
         terms.add("DISCARD")
-    if re.search(r"\bgold\b", text):
-        terms.add("GOLD")
     if re.search(r"\bdestroy\b", text):
         terms.add("DESTROY")
     if re.search(r"\bbanish\b", text):
@@ -281,8 +280,15 @@ def draw_hover_panel(
     py = max(8, min(int(anchor.centery - PANEL_H // 2), SCREEN_HEIGHT - PANEL_H - 8))
 
     panel = pygame.Rect(px, py, PANEL_W, PANEL_H)
+    draw_drop_shadow(screen, panel, offset=(4, 4), size=8, alpha=140)
+    draw_glow(screen, panel, NEON_BLUE, glow_size=5, alpha=120)
     pygame.draw.rect(screen, BG_DARK, panel)
     pygame.draw.rect(screen, NEON_BLUE, panel, width=2)
+
+    # Set clip region to prevent text bleeding outside panel
+    old_clip = screen.get_clip()
+    clip_rect = pygame.Rect(panel.x + 2, panel.y + 2, panel.width - 4, panel.height - 4)
+    screen.set_clip(clip_rect)
 
     cx = panel.x + PAD
     cy = panel.y + PAD
@@ -330,6 +336,7 @@ def draw_hover_panel(
                 note = effect_font.render(line, True, MUTED_TEXT)
                 screen.blit(note, (cx, cy))
                 cy += note.get_height() + 2
+        cy += 4
 
     if not has_ability_text:
         for label, eff in (("DEPLOY", card.on_play), ("DEATHWISH", card.on_death)):
@@ -385,3 +392,6 @@ def draw_hover_panel(
     terms = _ability_terms(card)
     if terms:
         _draw_glossary_panel(screen, fonts, panel, terms)
+
+    # Restore original clip region
+    screen.set_clip(old_clip)

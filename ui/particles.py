@@ -382,8 +382,6 @@ class ParticleSystem:
         elif event_type == "DEATHWISH":
             self.shockwave(cx, cy, (150, 150, 150))
             self.emit(cx, cy, "smoke", 8)
-        elif event_type == "GOLD":
-            self.emit(cx, cy, "trail", 20)
         elif event_type == "DRAW":
             self.emit(cx, cy, "vortex", 15, cx=cx, cy=cy)
         elif event_type == "TIMER":
@@ -520,3 +518,79 @@ class CardDrawAnimationSystem:
 
 
 draw_animation_system = CardDrawAnimationSystem()
+
+
+class CardFieldAnimation:
+    """Animate a card being deployed from hand to field."""
+
+    def __init__(self, start_x: float, start_y: float, end_x: float, end_y: float):
+        """Args: start/end positions (rects will be updated from match.py)"""
+        self.start_x = start_x
+        self.start_y = start_y
+        self.end_x = end_x
+        self.end_y = end_y
+        self.progress = 0.0
+        self.duration = 0.4  # 400ms
+        self.elapsed = 0.0
+        self.is_done = False
+
+    def update(self, dt: float) -> None:
+        """Update animation with delta time in seconds."""
+        if self.is_done:
+            return
+        self.elapsed += dt
+        self.progress = min(1.0, self.elapsed / self.duration)
+
+        # Ease-out cubic
+        t = self.progress
+        eased = 1.0 - (1.0 - t) ** 3
+        self.progress = eased
+
+        if self.elapsed >= self.duration:
+            self.is_done = True
+
+    def get_position(self) -> tuple[float, float]:
+        """Get interpolated position."""
+        x = self.start_x + (self.end_x - self.start_x) * self.progress
+        y = self.start_y + (self.end_y - self.start_y) * self.progress
+        return x, y
+
+    def get_scale(self) -> float:
+        """Scale bounces: 1.0 → 1.05 → 1.0 during animation."""
+        import math
+        bounce = math.sin(self.progress * math.pi) * 0.05
+        return 1.0 + bounce
+
+
+class CardFieldAnimationSystem:
+    """Manages multiple card deployment animations."""
+
+    def __init__(self):
+        self.animations: list[CardFieldAnimation] = []
+        self.card_scales: dict = {}  # Maps card object id to scale
+
+    def add_field_animation(self, start_x: float, start_y: float, end_x: float, end_y: float, card) -> None:
+        """Add animation and track card scale."""
+        self.animations.append(CardFieldAnimation(start_x, start_y, end_x, end_y))
+        self.card_scales[id(card)] = 1.0
+
+    def update(self, dt: float, cards_to_animate: list) -> None:
+        """Update all animations and apply scales to cards."""
+        for anim in self.animations:
+            anim.update(dt)
+
+        for anim, card in zip(self.animations, cards_to_animate):
+            if not anim.is_done:
+                self.card_scales[id(card)] = anim.get_scale()
+                x, y = anim.get_position()
+                card.set_center(x, y)
+
+        self.animations = [a for a in self.animations if not a.is_done]
+        self.card_scales = {k: v for k, v in self.card_scales.items() if k in [id(c) for c in cards_to_animate]}
+
+    def get_scale(self, card) -> float:
+        """Get current scale for a card."""
+        return self.card_scales.get(id(card), 1.0)
+
+
+field_animation_system = CardFieldAnimationSystem()

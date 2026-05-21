@@ -54,7 +54,6 @@ ALLOWED_EFFECTS = {
     "CLASH",
     "DRAW",
     "DISCARD",
-    "GOLD",
     "REVIVE",
     "NONE",
 }
@@ -77,7 +76,6 @@ GAMEPLAY_SUPPORTED_EFFECTS = {
     "CLASH",
     "DRAW",
     "DISCARD",
-    "GOLD",
     "REVIVE",
     "NONE",
 }
@@ -90,7 +88,6 @@ NUMBERED_EFFECTS = {
     "VITALITY",
     "DRAW",
     "DISCARD",
-    "GOLD",
 }
 NUMBERLESS_EFFECTS = {
     "DESTROY",
@@ -122,7 +119,6 @@ EFFECT_KEYWORDS = {
     "DAMAGE": {"damage", "deal"},
     "HEAL": {"heal", "restore"},
     "DRAW": {"draw"},
-    "GOLD": {"gold", "gain"},
     "BLEEDING": {"bleeding"},
     "VITALITY": {"vitality"},
     "POISON": {"poison"},

@@ -56,7 +56,12 @@ def run_main_menu(
                     return "settings"
 
         draw_background(screen, background)
-        draw_title(screen, "WIKIDECK", fonts, y=90)
+        # Place a larger logo centered above the PLAY button
+        logo_max_h = 300
+        # Positive value moves logo down, negative moves it up
+        logo_offset = 80
+        logo_y = start_y - logo_max_h - 16 + logo_offset
+        draw_title(screen, "WIKIDECK", fonts, y=logo_y, max_height=logo_max_h)
 
         for (label, _), (rect, _) in zip(items, buttons):
             draw_button(screen, rect, label, fonts, hovered=rect.collidepoint(mx, my))

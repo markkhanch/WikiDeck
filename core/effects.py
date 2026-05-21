@@ -434,10 +434,6 @@ def apply_effect(
             return None
         return f"{card.title}: Enemy discards {dropped} cards."
 
-    if effect == "GOLD":
-        owner.gold += max(0, value)
-        return f"{card.title}: Gain {max(0, value)} gold."
-
     if effect == "REVIVE":
         if target is None or target not in owner.discard:
             return None

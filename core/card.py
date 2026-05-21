@@ -11,6 +11,7 @@ import pygame
 
 from config import CARD_WIDTH, CARD_HEIGHT, BG_DARK, BG_LIGHT, WHITE_TEXT, NEON_RED, GOLD, THEME_COLORS, RARITY_COLORS
 from core.effects import Effect
+from ui.effects import draw_drop_shadow, draw_glow
 
 
 def _draw_text_with_shadow(
@@ -138,6 +139,9 @@ class Card:
         x, y = int(self.rect.x), int(self.rect.y)
         frame = pygame.Rect(x, y, CARD_WIDTH, CARD_HEIGHT)
         inner = frame.inflate(-4, -4)
+
+        draw_drop_shadow(surface, frame, offset=(3, 3), size=6, alpha=100)
+        draw_glow(surface, frame, border_color, glow_size=6, alpha=140)
 
         pygame.draw.rect(surface, BG_LIGHT, frame, border_radius=8)
         pygame.draw.rect(surface, border_color, frame, width=2, border_radius=8)

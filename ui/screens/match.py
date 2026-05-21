@@ -1,8 +1,10 @@
+import os
 import random
 
 import pygame
 
 from config import (
+    IMAGES_DIR,
     SCREEN_WIDTH,
     SCREEN_HEIGHT,
     BG_DARK,
@@ -31,7 +33,8 @@ from data.settings_service import get_bool, get_int, target_fps
 from core.card import Card
 from core.player import Player
 from core.game_state import GameState, Phase
-from ui.particles import draw_animation_system
+from ui.particles import draw_animation_system, field_animation_system
+from ui.hud_utils import draw_turn_info, draw_player_panel, draw_score_info, draw_zone_backgrounds
 from network.protocol import (
     CONNECTION_STATUS,
     DISCARD_CARD,
@@ -52,6 +55,33 @@ from network.sync import apply_serialized_state
 from ui.components.hover_panel import draw_hover_panel
 from ui.particles import particle_system
 from ui.screens.common import draw_close_button, close_button_rect
+
+
+_CARD_BACK_SURFACE: pygame.Surface | None = None
+
+
+def _load_card_back_surface() -> pygame.Surface | None:
+    global _CARD_BACK_SURFACE
+    if _CARD_BACK_SURFACE is not None:
+        return _CARD_BACK_SURFACE
+
+    for filename in ("Back.png", "back.png"):
+        path = os.path.join(IMAGES_DIR, filename)
+        if not os.path.isfile(path):
+            continue
+        try:
+            surface = pygame.image.load(path)
+            try:
+                surface = surface.convert_alpha()
+            except pygame.error:
+                pass
+            _CARD_BACK_SURFACE = surface
+            return _CARD_BACK_SURFACE
+        except pygame.error:
+            continue
+
+    _CARD_BACK_SURFACE = None
+    return None
 
 
 def _clone_card(c: Card) -> Card:
@@ -140,12 +170,19 @@ def _draw_divider(screen: pygame.Surface) -> None:
 
 
 def _draw_card_back(screen: pygame.Surface, rect: pygame.FRect, fonts: dict) -> None:
-    pygame.draw.rect(screen, BG_MID, rect)
-    pygame.draw.rect(screen, NEON_BLUE, rect, width=2)
-    inner = rect.inflate(-12, -12)
+    back_surface = _load_card_back_surface()
+    target = pygame.Rect(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
+    if back_surface is not None:
+        scaled = pygame.transform.smoothscale(back_surface, target.size)
+        screen.blit(scaled, target)
+        return
+
+    pygame.draw.rect(screen, BG_MID, target)
+    pygame.draw.rect(screen, NEON_BLUE, target, width=2)
+    inner = target.inflate(-12, -12)
     pygame.draw.rect(screen, BG_LIGHT, inner, width=1)
     logo = fonts["big"].render("W", True, NEON_GREEN)
-    screen.blit(logo, logo.get_rect(center=rect.center))
+    screen.blit(logo, logo.get_rect(center=target.center))
 
 
 LOG_DRAWER_WIDTH = 390
@@ -512,6 +549,9 @@ def _ability_preview_lines(card: Card) -> list[str]:
     ability_text = str(getattr(card, "ability_text", "") or "").strip()
     if ability_text:
         if trigger:
+            ability_text_upper = ability_text.upper()
+            if ability_text_upper.startswith(trigger + ":") or ability_text_upper.startswith(trigger + " "):
+                return [ability_text]
             return [f"{trigger}: {ability_text}"]
         return [ability_text]
     effect_type = str(getattr(card, "effect_type", "NONE") or "NONE").strip().upper()
@@ -533,7 +573,13 @@ def _draw_hand_ability_hint(
     lines = []
     for src in _ability_preview_lines(card):
         lines.extend(_wrap_text(src, body_font, panel_w - pad * 2))
-    panel_h = min(170, 44 + len(lines) * (body_font.get_height() + 2))
+    
+    # Calculate panel height: padding + title + spacing + ability lines + hint spacing + hint
+    title_h = title_font.get_height()
+    hint_h = body_font.get_height()
+    content_h = title_h + 4 + (len(lines) * (body_font.get_height() + 2)) + 8 + hint_h + 6
+    panel_h = min(270, pad * 2 + content_h)
+    
     px = int(card.rect.right + 12)
     if px + panel_w > SCREEN_WIDTH - 8:
         px = int(card.rect.left - panel_w - 12)
@@ -550,12 +596,17 @@ def _draw_hand_ability_hint(
     title = title_font.render(card.title[:28], True, WHITE_TEXT)
     screen.blit(title, (cx, cy))
     cy += title.get_height() + 4
+    
+    # Reserve space for hint at the bottom
+    hint_reserve = hint_h + 12
+    
     for line in lines:
+        if cy + body_font.get_height() > panel.bottom - hint_reserve:
+            break
         surf = body_font.render(line, True, GOLD)
         screen.blit(surf, (cx, cy))
         cy += body_font.get_height() + 2
-        if cy > panel.bottom - 22:
-            break
+    
     hint = body_font.render("RMB: full details", True, MUTED_TEXT)
     screen.blit(hint, (cx, panel.bottom - hint.get_height() - 6))
 
@@ -681,33 +732,43 @@ def _draw_hud(screen: pygame.Surface, game: GameState, fonts: dict) -> None:
     p1, p2 = game.players
     active = game.active_player
 
-    center_text = f"Turn {game.turn_number}  —  {active.name}'s turn ({game.phase.value})"
-    surf = fonts["hud"].render(center_text, True, NEON_GREEN)
-    screen.blit(surf, surf.get_rect(midtop=(SCREEN_WIDTH // 2, 4)))
+    # Draw zone backgrounds first (subtle, behind everything)
+    draw_zone_backgrounds(screen)
 
-    if game.last_event:
-        ev = fonts["small"].render(game.last_event, True, GOLD)
-        screen.blit(ev, ev.get_rect(midtop=(SCREEN_WIDTH // 2, 26)))
+    # Draw player panels on sides
+    draw_player_panel(
+        screen,
+        p2.name,
+        len(p2.hand),
+        len(p2.deck),
+        len(p2.discard),
+        len(p2.on_field),
+        game.base_sum(p2),
+        game.score_for(p2),
+        active is p2,
+        is_p1=False,
+        fonts=fonts,
+    )
 
-    def _draw_score_chip(label: str, value: str, x: int, y: int, border: tuple[int, int, int]) -> int:
-        text = fonts["small"].render(f"{label} {value}", True, WHITE_TEXT)
-        rect = pygame.Rect(x, y, text.get_width() + 12, text.get_height() + 4)
-        pygame.draw.rect(screen, BG_MID, rect)
-        pygame.draw.rect(screen, border, rect, width=1)
-        screen.blit(text, (rect.x + 6, rect.y + 2))
-        return rect.right + 6
+    draw_player_panel(
+        screen,
+        p1.name,
+        len(p1.hand),
+        len(p1.deck),
+        len(p1.discard),
+        len(p1.on_field),
+        game.base_sum(p1),
+        game.score_for(p1),
+        active is p1,
+        is_p1=True,
+        fonts=fonts,
+    )
 
-    def _draw_player_stats(p: Player, meta_y: int, score_y: int, color: tuple[int, int, int]) -> None:
-        field_hp = game.base_sum(p)
-        score = game.score_for(p)
-        line = f"{p.name}  H:{len(p.hand)}  D:{len(p.deck)}  X:{len(p.discard)}  F:{len(p.on_field)}"
-        screen.blit(fonts["small"].render(line, True, color), (10, meta_y))
-        x = 10
-        x = _draw_score_chip("FIELD HP", str(field_hp), x, score_y, NEON_BLUE)
-        x = _draw_score_chip("TOTAL", str(score), x, score_y, NEON_GREEN)
+    # Draw turn info at top center
+    # draw_turn_info(screen, game.turn_number, active.name, game.phase.value, active is p1, fonts)
 
-    _draw_player_stats(p2, 4, 22, NEON_GREEN if active is p2 else MUTED_TEXT)
-    _draw_player_stats(p1, SCREEN_HEIGHT - 42, SCREEN_HEIGHT - 24, NEON_GREEN if active is p1 else MUTED_TEXT)
+    # Draw score info at top right
+    draw_score_info(screen, game.base_sum(p1), game.score_for(p1), game.base_sum(p2), game.score_for(p2), fonts)
 
 
 def _draw_end_turn_button(screen: pygame.Surface, rect: pygame.Rect,
@@ -891,7 +952,6 @@ def _emit_particles_for_event(event_text, source_rect, target_rect=None):
         "BANISH",
         "DEPLOY",
         "DEATHWISH",
-        "GOLD",
         "DRAW",
         "DUEL",
         "CLASH",
@@ -1101,7 +1161,10 @@ def run_match(
     while True:
         dt = clock.tick(target_fps()) / 1000.0  # Convert milliseconds to seconds
         draw_animation_system.update(dt)
-        
+
+        all_field_cards = list(game.players[0].on_field) + list(game.players[1].on_field)
+        field_animation_system.update(dt, all_field_cards)
+
         if network_mode and network_client is not None:
             my_role, network_status, state_changed, disconnected, has_received_state = _consume_network_messages(
                 game,
@@ -1506,6 +1569,9 @@ def run_match(
             screen.blit(background, (0, 0))
         else:
             screen.fill(BG_DARK)
+
+        # Draw zone backgrounds for P1 (bottom) and P2 (top)
+        draw_zone_backgrounds(screen)
 
         _draw_divider(screen)
 

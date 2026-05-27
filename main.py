@@ -88,7 +88,7 @@ def run_app() -> None:
     pygame.display.set_caption(WINDOW_TITLE)
     fonts = make_fonts()
 
-    ensure_shop_singles(min_count=2)
+    ensure_shop_singles(min_count=2, background=True)
     background = load_background()
 
     state: str | None = "menu"

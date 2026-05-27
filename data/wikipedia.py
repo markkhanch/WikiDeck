@@ -10,7 +10,7 @@ try:
 except ImportError:
     Image = None
 
-HEADERS = {"User-Agent": "WikiDeck/1.0 (student project)"}
+HEADERS = {"User-Agent": "WikiDeck/2.0 (https://github.com/markkhanchevskii/WikiDeck)"}
 TIMEOUT = 10  # seconds — stop waiting if Wikipedia is slow
 MEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 _IMAGE_EXTS = (".jpg", ".jpeg", ".png")

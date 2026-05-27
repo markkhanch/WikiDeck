@@ -5,9 +5,22 @@ import re
 
 from core.card import Card
 from core.effects import Effect
-from data.db import get_or_fetch_article, get_or_fetch_image
+from data.db import get_cached_article, get_cached_image, get_or_fetch_article, get_or_fetch_image
 from data.wikipedia import fetch_media_image_url
 from data.ollama_gen import effects_from_spec
+
+
+_EFFECT_TO_ARCHETYPE = {
+    "DAMAGE": "WARRIOR", "DESTROY": "WARRIOR", "CLASH": "WARRIOR", "DUEL": "WARRIOR",
+    "BANISH": "TYRANT", "BLEEDING": "TYRANT", "POISON": "TYRANT", "DOOMED": "TYRANT",
+    "HEAL": "HEALER", "VITALITY": "HEALER", "SHIELD": "HEALER", "IMMUNITY": "HEALER",
+    "DRAW": "SCHOLAR", "VEIL": "SCHOLAR", "REVIVE": "SCHOLAR",
+    "LOCK": "DIPLOMAT", "DISCARD": "DIPLOMAT",
+}
+
+
+def _fallback_archetype(effect_type: str) -> str:
+    return _EFFECT_TO_ARCHETYPE.get(str(effect_type or "").upper(), "SCHOLAR")
 
 
 def _effect_type_from_runtime(on_play: Effect, on_death: Effect) -> str:
@@ -62,6 +75,9 @@ def build_card(
     trigger_value: int = 0,
     effect_type: str = "",
     ability_value: int = 0,
+    archetype: str = "",
+    rationale: str = "",
+    allow_fetch: bool = True,
 ) -> Card:
     requested_effect_type = effect_type.strip().upper()
     resolved_effect_type = (
@@ -78,15 +94,18 @@ def build_card(
         not normalized_ability_text.strip() or re.search(r"\b(boost|drain)\b", normalized_ability_text, re.IGNORECASE)
     ):
         normalized_ability_text = _ability_text_for_effect(resolved_effect_type, resolved_value)
-    data = get_or_fetch_article(title)
+    data = get_or_fetch_article(title) if allow_fetch else get_cached_article(title)
     if data is None:
-        media_url = fetch_media_image_url(title)
-        image = get_or_fetch_image(title, media_url)
+        if allow_fetch:
+            media_url = fetch_media_image_url(title)
+            image = get_or_fetch_image(title, media_url)
+        else:
+            image = get_cached_image(title)
         return Card(
             title=title,
             theme=theme,
             hp=hp,
-            description="(offline)",
+            description="(offline)" if allow_fetch else "",
             image=image,
             on_play=on_play,
             on_death=on_death,
@@ -98,12 +117,17 @@ def build_card(
             trigger_value=int(trigger_value or 0),
             effect_type=resolved_effect_type,
             ability_value=resolved_value,
+            archetype=str(archetype or "").upper(),
+            rationale=str(rationale or ""),
             max_hp=hp,
         )
-    image = get_or_fetch_image(data["title"], data["thumbnail"])
-    if image is None:
-        media_url = fetch_media_image_url(data["title"])
-        image = get_or_fetch_image(data["title"], media_url)
+    if allow_fetch:
+        image = get_or_fetch_image(data["title"], data["thumbnail"])
+        if image is None:
+            media_url = fetch_media_image_url(data["title"])
+            image = get_or_fetch_image(data["title"], media_url)
+    else:
+        image = get_cached_image(data["title"])
     return Card(
         title=data["title"],
         description=data["description"],
@@ -119,13 +143,15 @@ def build_card(
         trigger_value=int(trigger_value or 0),
         effect_type=resolved_effect_type,
         ability_value=resolved_value,
+        archetype=str(archetype or "").upper(),
+        rationale=str(rationale or ""),
         max_hp=hp,
         on_play=on_play,
         on_death=on_death,
     )
 
 
-def build_card_from_spec(spec: dict) -> Card:
+def build_card_from_spec(spec: dict, *, allow_fetch: bool = True) -> Card:
     on_play, on_death = effects_from_spec(spec)
     return build_card(
         spec["title"],
@@ -141,4 +167,7 @@ def build_card_from_spec(spec: dict) -> Card:
         trigger_value=int(spec.get("trigger_value", 0) or 0),
         effect_type=spec.get("effect_type", "NONE"),
         ability_value=int(spec.get("ability_value", 0) or 0),
+        archetype=str(spec.get("archetype") or _fallback_archetype(spec.get("effect_type", ""))),
+        rationale=str(spec.get("rationale", "") or ""),
+        allow_fetch=allow_fetch,
     )

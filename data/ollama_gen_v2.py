@@ -352,7 +352,7 @@ def _build_ollama_client(host: str):
     if ollama is None:
         return None
     if hasattr(ollama, "Client"):
-        return ollama.Client(host=host)
+        return ollama.Client(host=host, timeout=_request_timeout())
     return None
 
 
@@ -501,7 +501,18 @@ def _looks_like_person(title: str, summary: str) -> bool:
     return False
 
 
+# In-process cache for pageviews. The pool-walker can ask for the same title
+# many times within one session (rejections, retries), and the Wikimedia
+# pageviews endpoint rate-limits aggressively. Cache for the lifetime of the
+# process — pageviews change monthly, that's fine.
+_PAGEVIEWS_CACHE: dict[str, int] = {}
+
+
 def get_monthly_views(title: str) -> int:
+    cached = _PAGEVIEWS_CACHE.get(title)
+    if cached is not None:
+        return cached
+
     safe_title = quote(title.replace(" ", "_"), safe="")
     now = datetime.now(UTC)
     first_of_this_month = datetime(now.year, now.month, 1, tzinfo=UTC)
@@ -510,17 +521,46 @@ def get_monthly_views(title: str) -> int:
     start = first_of_prev_month.strftime("%Y%m%d00")
     end = last_of_prev_month.strftime("%Y%m%d00")
     url = WIKI_PAGEVIEWS_API.format(safe_title, start, end)
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=_request_timeout())
+
+    views: Optional[int] = None
+    for attempt in range(4):
+        try:
+            response = requests.get(url, headers=HEADERS, timeout=_request_timeout())
+        except requests.RequestException:
+            time.sleep(0.4 * (attempt + 1))
+            continue
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            try:
+                delay = int(retry_after) if retry_after else 1
+            except ValueError:
+                delay = 1
+            time.sleep(min(5, max(1, delay)) * (attempt + 1))
+            continue
+        if response.status_code == 404:
+            # No data for this article in the requested range — treat as 0,
+            # don't retry (Wikimedia returns 404 for unknown titles too).
+            views = 0
+            break
+        if response.status_code >= 500:
+            time.sleep(0.6 * (attempt + 1))
+            continue
         if response.status_code != 200:
-            return 0
-        data = response.json()
-        items = data.get("items") or []
-        if not items:
-            return 0
-        return int(items[-1].get("views", 0) or 0)
-    except Exception:
+            views = 0
+            break
+        try:
+            items = response.json().get("items") or []
+        except ValueError:
+            items = []
+        views = int(items[-1].get("views", 0) or 0) if items else 0
+        break
+
+    if views is None:
+        # All attempts exhausted (probably persistent rate-limit) — don't poison
+        # the cache so a later call can still recover.
         return 0
+    _PAGEVIEWS_CACHE[title] = views
+    return views
 
 
 def assign_rarity_by_views(views: int) -> str:
@@ -673,6 +713,235 @@ def _effect_candidates(hits: dict[str, int], theme: str = "LIVING") -> list[str]
     return [effect for effect in unique if effect in VALID_EFFECTS]
 
 
+ARCHETYPES = ("WARRIOR", "SCHOLAR", "HEALER", "TYRANT", "ARTIST", "DIPLOMAT")
+
+
+# Archetype -> weighted distribution of which game effects this class prefers.
+# Weights are relative; the picker normalizes them. Sum doesn't need to be 100.
+ARCHETYPE_EFFECT_WEIGHTS: dict[str, dict[str, int]] = {
+    "WARRIOR":  {"DAMAGE": 35, "DESTROY": 20, "CLASH": 15, "DUEL": 15, "BANISH": 10, "BLEEDING": 5},
+    "TYRANT":   {"POISON": 25, "BLEEDING": 20, "DOOMED": 15, "DESTROY": 15, "DISCARD": 15, "BANISH": 10},
+    "HEALER":   {"HEAL": 30, "VITALITY": 25, "SHIELD": 20, "IMMUNITY": 15, "REVIVE": 10},
+    "SCHOLAR":  {"DRAW": 35, "LOCK": 20, "VEIL": 15, "REVIVE": 15, "DISCARD": 15},
+    "ARTIST":   {"VITALITY": 25, "DRAW": 20, "SHIELD": 15, "REVIVE": 15, "HEAL": 15, "IMMUNITY": 10},
+    "DIPLOMAT": {"LOCK": 30, "DISCARD": 20, "BANISH": 15, "VEIL": 15, "DRAW": 10, "IMMUNITY": 10},
+}
+
+
+# Archetype -> weighted distribution of which triggers fit this class.
+# Triggers no longer pull cards into ON-DEATH purely because of effect type.
+ARCHETYPE_TRIGGER_WEIGHTS: dict[str, dict[str, int]] = {
+    "WARRIOR":  {"DEPLOY": 50, "DEATHBLOW": 20, "BLOODTHIRST": 15, "ADRENALINE": 10, "PASSIVE": 5},
+    "TYRANT":   {"DEPLOY": 35, "ON DEATH:enemy": 20, "DEATHBLOW": 20, "ORDER": 15, "TIMER": 10},
+    "HEALER":   {"DEPLOY": 35, "ON DEATH:ally": 25, "DEATHWISH": 20, "ORDER": 15, "PASSIVE": 5},
+    "SCHOLAR":  {"ORDER": 35, "DEPLOY": 30, "TIMER": 15, "DEATHWISH": 10, "PASSIVE": 10},
+    "ARTIST":   {"DEPLOY": 35, "DEATHWISH": 30, "ORDER": 20, "TIMER": 10, "PASSIVE": 5},
+    "DIPLOMAT": {"ORDER": 35, "DEPLOY": 30, "DEATHBLOW": 15, "TIMER": 10, "PASSIVE": 10},
+}
+
+
+# Target global shares of effects across the whole DB. Used to bias the
+# weighted picker toward effects that are underrepresented overall. Sums to 1.
+EFFECT_TARGET_SHARE: dict[str, float] = {
+    "DAMAGE":   0.18,
+    "DESTROY":  0.08,
+    "BANISH":   0.06,
+    "BLEEDING": 0.07,
+    "POISON":   0.05,
+    "DUEL":     0.05,
+    "CLASH":    0.05,
+    "HEAL":     0.07,
+    "VITALITY": 0.08,
+    "SHIELD":   0.06,
+    "IMMUNITY": 0.04,
+    "DRAW":     0.08,
+    "DISCARD":  0.04,
+    "LOCK":     0.05,
+    "VEIL":     0.03,
+    "REVIVE":   0.02,
+    "DOOMED":   0.02,
+}
+
+TRIGGER_TARGET_SHARE: dict[str, float] = {
+    "DEPLOY":          0.35,
+    "ORDER":           0.20,
+    "DEATHWISH":       0.10,
+    "DEATHBLOW":       0.10,
+    "ON DEATH:ally":   0.05,
+    "ON DEATH:enemy":  0.04,
+    "TIMER":           0.06,
+    "ADRENALINE":      0.04,
+    "BLOODTHIRST":     0.04,
+    "PASSIVE":         0.04,
+}
+
+
+_GLOBAL_DIST_CACHE: dict[str, tuple[float, dict[str, int]]] = {}
+_GLOBAL_DIST_TTL_SEC = 30.0
+
+
+def _global_effect_distribution() -> dict[str, int]:
+    """Cached snapshot of the current effect distribution in the DB."""
+    from data.db import get_effect_distribution
+    now = time.time()
+    cached = _GLOBAL_DIST_CACHE.get("effects")
+    if cached and now - cached[0] < _GLOBAL_DIST_TTL_SEC:
+        return cached[1]
+    try:
+        snap = get_effect_distribution()
+    except Exception:
+        snap = {}
+    _GLOBAL_DIST_CACHE["effects"] = (now, snap)
+    return snap
+
+
+def _global_trigger_distribution() -> dict[str, int]:
+    from data.db import get_trigger_distribution
+    now = time.time()
+    cached = _GLOBAL_DIST_CACHE.get("triggers")
+    if cached and now - cached[0] < _GLOBAL_DIST_TTL_SEC:
+        return cached[1]
+    try:
+        snap = get_trigger_distribution()
+    except Exception:
+        snap = {}
+    _GLOBAL_DIST_CACHE["triggers"] = (now, snap)
+    return snap
+
+
+def invalidate_distribution_cache() -> None:
+    """Call when many new cards are written and the snapshot is stale."""
+    _GLOBAL_DIST_CACHE.clear()
+
+
+def _global_adjustment(
+    key: str,
+    distribution: dict[str, int],
+    targets: dict[str, float],
+) -> float:
+    """Multiplier for `key`'s weight based on how its global share compares to target."""
+    total = sum(distribution.values())
+    if total < 30:
+        # Too little data — don't try to balance yet, let archetype weights drive.
+        return 1.0
+    target = targets.get(key, 0.0)
+    if target <= 0:
+        return 1.0
+    actual = distribution.get(key, 0) / total
+    ratio = actual / target
+    if ratio >= 1.5:
+        return 0.2
+    if ratio >= 1.0:
+        return 0.6
+    if ratio <= 0.5:
+        return 1.8
+    return 1.0
+
+
+# Pairs that don't make sense to combine — skip during trigger selection.
+# e.g. ADRENALINE (boost-when-near-death) doesn't fit defensive heals.
+INCOMPATIBLE_TRIGGER_EFFECT: set[tuple[str, str]] = {
+    ("ADRENALINE", "HEAL"), ("ADRENALINE", "VITALITY"),
+    ("ADRENALINE", "SHIELD"), ("ADRENALINE", "IMMUNITY"),
+    ("BLOODTHIRST", "HEAL"), ("BLOODTHIRST", "SHIELD"),
+    ("ON DEATH:enemy", "HEAL"), ("ON DEATH:enemy", "VITALITY"),
+    ("ON DEATH:enemy", "SHIELD"), ("ON DEATH:enemy", "IMMUNITY"),
+    ("ON DEATH:enemy", "REVIVE"),
+    ("ON DEATH:ally", "DAMAGE"), ("ON DEATH:ally", "DESTROY"),
+    ("ON DEATH:ally", "BANISH"), ("ON DEATH:ally", "POISON"),
+    ("ON DEATH:ally", "BLEEDING"),
+    ("DEATHBLOW", "HEAL"), ("DEATHBLOW", "REVIVE"),
+    ("DEATHWISH", "DAMAGE"), ("DEATHWISH", "DESTROY"), ("DEATHWISH", "BANISH"),
+    ("PASSIVE", "DESTROY"), ("PASSIVE", "BANISH"),
+}
+
+
+def _weighted_pick(
+    weights: dict[str, int],
+    bucket: dict[str, int],
+    total_in_pack: int,
+    max_share: float,
+    forbidden: set[str] | None = None,
+    global_distribution: dict[str, int] | None = None,
+    target_shares: dict[str, float] | None = None,
+) -> str:
+    """Pick from a weighted distribution, biased away from over-saturated items.
+
+    Two layers of bias:
+      - per-pack: each pack of 5 should not exceed `max_share` of one key.
+      - global:  the whole DB drifts toward `target_shares` proportions.
+    """
+    forbidden = forbidden or set()
+    pool = {k: w for k, w in weights.items() if k not in forbidden and w > 0}
+    if not pool:
+        # All forbidden — relax constraint.
+        pool = {k: w for k, w in weights.items() if w > 0}
+    if not pool:
+        return next(iter(weights))
+
+    adjusted: dict[str, float] = {}
+    denom = max(1, total_in_pack)
+    for key, base in pool.items():
+        weight = float(base)
+
+        # Per-pack penalty.
+        share = bucket.get(key, 0) / denom
+        if share >= max_share:
+            weight *= 0.1
+        elif share >= max_share * 0.6:
+            weight *= 0.5
+
+        # Global DB-wide adjustment toward target shares.
+        if global_distribution is not None and target_shares is not None:
+            weight *= _global_adjustment(key, global_distribution, target_shares)
+
+        adjusted[key] = weight
+
+    keys = list(adjusted.keys())
+    vals = list(adjusted.values())
+    return random.choices(keys, weights=vals, k=1)[0]
+
+
+def _choose_archetype(hits: dict[str, int], effect_type: str) -> str:
+    """Pick a thematic archetype from Wikipedia keyword signals.
+
+    Falls back to mapping the chosen effect_type to a class when the article
+    has no strong biographical cues.
+    """
+    war = hits.get("war", 0)
+    assassin = hits.get("assassin", 0) + hits.get("collapse", 0)
+    medicine = hits.get("medicine", 0) + hits.get("disease", 0)
+    religion = hits.get("religion", 0)
+    education = hits.get("education", 0)
+    culture = hits.get("culture", 0)
+    politics = hits.get("politics", 0) + hits.get("economy", 0)
+
+    scores = {
+        "WARRIOR": war + hits.get("fortress", 0),
+        "TYRANT": assassin,
+        "HEALER": medicine + religion,
+        "SCHOLAR": education,
+        "ARTIST": culture,
+        "DIPLOMAT": politics,
+    }
+    top = max(scores.values())
+    if top > 0:
+        # Prefer archetype with strongest signal; ties broken by declared order.
+        for arch in ("WARRIOR", "TYRANT", "HEALER", "SCHOLAR", "ARTIST", "DIPLOMAT"):
+            if scores[arch] == top:
+                return arch
+
+    # Fallback: derive from effect_type.
+    effect_to_arch = {
+        "DAMAGE": "WARRIOR", "DESTROY": "WARRIOR", "CLASH": "WARRIOR", "DUEL": "WARRIOR",
+        "BANISH": "TYRANT", "BLEEDING": "TYRANT", "POISON": "TYRANT", "DOOMED": "TYRANT",
+        "HEAL": "HEALER", "VITALITY": "HEALER", "SHIELD": "HEALER", "IMMUNITY": "HEALER",
+        "DRAW": "SCHOLAR", "VEIL": "SCHOLAR", "REVIVE": "SCHOLAR",
+        "LOCK": "DIPLOMAT", "DISCARD": "DIPLOMAT",
+    }
+    return effect_to_arch.get(effect_type, "SCHOLAR")
+
+
 def _trigger_candidates(effect_type: str) -> list[str]:
     if effect_type in {"DAMAGE", "DESTROY", "BANISH", "BLEEDING", "POISON", "LOCK", "DUEL", "CLASH"}:
         return ["DEPLOY", "DEATHBLOW"]
@@ -702,10 +971,10 @@ def _choose_with_diversity(
 
 
 def _ability_value(effect_type: str, rarity: str) -> int:
+    # Numbered effects: scale value by rarity.
     if effect_type in {"DAMAGE", "BLEEDING", "VITALITY", "DRAW", "DISCARD"}:
         return 1 if rarity == "COMMON" else 2
-    if effect_type in {"POISON", "DESTROY", "BANISH", "HEAL", "SHIELD", "IMMUNITY", "LOCK", "VEIL", "DOOMED", "DUEL", "CLASH", "REVIVE", "NONE"}:
-        return 0
+    # Everything else is numberless (POISON, DESTROY, BANISH, HEAL, ...).
     return 0
 
 
@@ -775,16 +1044,40 @@ def build_grounded_spec(
     trigger_bucket = diversity.get("triggers", {})
     total = max(int(diversity.get("target", 1)), 1)
 
-    candidates = _effect_candidates(hits, theme="LIVING")
-    filtered_candidates = [effect for effect in candidates if effect not in avoid_effects]
-    if not filtered_candidates:
-        filtered_candidates = candidates
-    effect_type = _choose_with_diversity(filtered_candidates, effect_bucket, total, max_share=0.35)
-    trigger = _choose_with_diversity(
-        _trigger_candidates(effect_type),
+    # 1) Pick archetype from Wikipedia signals first (or random if no signals).
+    archetype = _choose_archetype(hits, effect_type="")
+    if archetype not in ARCHETYPE_EFFECT_WEIGHTS:
+        archetype = random.choice(ARCHETYPES)
+
+    # 2) Effect is picked from the archetype's weighted distribution, biased
+    #    away from effects already saturated in this pack AND globally in DB.
+    global_effects = _global_effect_distribution()
+    effect_type = _weighted_pick(
+        ARCHETYPE_EFFECT_WEIGHTS[archetype],
+        effect_bucket,
+        total,
+        max_share=0.35,
+        forbidden=avoid_effects,
+        global_distribution=global_effects,
+        target_shares=EFFECT_TARGET_SHARE,
+    )
+
+    # 3) Trigger is also from the archetype distribution, filtered to be
+    #    compatible with the chosen effect, biased globally toward target.
+    trigger_weights = dict(ARCHETYPE_TRIGGER_WEIGHTS[archetype])
+    for trig in list(trigger_weights.keys()):
+        if (trig, effect_type) in INCOMPATIBLE_TRIGGER_EFFECT:
+            trigger_weights.pop(trig, None)
+    if not trigger_weights:
+        trigger_weights = {"DEPLOY": 1}
+    global_triggers = _global_trigger_distribution()
+    trigger = _weighted_pick(
+        trigger_weights,
         trigger_bucket,
         total,
-        max_share=0.75,
+        max_share=0.55,
+        global_distribution=global_triggers,
+        target_shares=TRIGGER_TARGET_SHARE,
     )
 
     value = _ability_value(effect_type, rarity)
@@ -800,6 +1093,7 @@ def build_grounded_spec(
         "ability_value": value,
         "ability_text": _with_trigger_context(trigger, _ability_text_template(effect_type, value)),
         "nemesis": None,
+        "archetype": archetype,
         "source_type": "WIKIPEDIA",
         "source_ref": title,
         "summary_snippet": summary[:_summary_max_chars()],
@@ -808,10 +1102,13 @@ def build_grounded_spec(
 
 def build_system_prompt() -> str:
     return (
-        "You are writing flavor text for WikiDeck cards.\n"
-        "Each card is a real historical person. Your job is to write\n"
-        "ONE ability sentence that reflects what this person actually\n"
-        "did in history, using the pre-selected game mechanic.\n\n"
+        "You are writing card text for WikiDeck — a trading card game whose\n"
+        "cards are real historical personalities. For each card, the engine\n"
+        "has already chosen the mechanic, the trigger, the numeric value,\n"
+        "and the archetype (class). You write two things:\n"
+        "  1) ability_text  — short, strict mechanical sentence (game text)\n"
+        "  2) rationale     — one biographical sentence connecting the person\n"
+        "                     to the mechanic (flavor text shown on hover)\n\n"
         "Rules for ability_text:\n"
         "- Under 20 words\n"
         "- Must contain ONLY mechanic and target (no explanations, no flavor)\n"
@@ -865,17 +1162,36 @@ def build_system_prompt() -> str:
         "- A real Wikipedia article title of a historical rival or opponent\n"
         "- Must be someone this person actually opposed in real history\n"
         "- Write null if no clear historical nemesis exists\n\n"
+        "Rules for rationale (this is FLAVOR text — different from ability_text):\n"
+        "- One short sentence, 8-18 words, written in present tense.\n"
+        "- Ties this person's REAL life or work to the mechanic they perform.\n"
+        "- Sounds like a quote or epitaph, not a game rule.\n"
+        "- DO NOT mention game terms (damage, vitality, draw, HP, etc).\n"
+        "- DO NOT mention the card's own name.\n"
+        "- DO NOT explain mechanics — evoke the historical action instead.\n"
+        "- End with a period.\n\n"
+        "Good rationale examples:\n"
+        "- (Confucius, archetype SCHOLAR, draw): \"His teachings outlasted the empires that ignored them.\"\n"
+        "- (Napoleon, WARRIOR, damage): \"Artillery announced his arrival before diplomats could speak.\"\n"
+        "- (Marie Curie, SCHOLAR, poison): \"She held the glow that killed her, and called it discovery.\"\n"
+        "- (Mahatma Gandhi, DIPLOMAT, lock): \"He stopped an empire with silence and a spinning wheel.\"\n"
+        "- (Mozart, ARTIST, vitality): \"His melodies still teach the dying how to live.\"\n"
+        "- (Genghis Khan, TYRANT, destroy): \"He inherited a tent and left behind a continent of ash.\"\n\n"
+        "Bad rationale examples (don't do this):\n"
+        "- \"This card deals damage because Napoleon was a warrior.\"  (explains mechanic)\n"
+        "- \"Damage fits him.\"  (no biography)\n"
+        "- \"Napoleon damages enemies.\"  (uses card name + game term)\n\n"
         "Return ONLY this JSON:\n"
         "{\n"
         '  "title": "EXACT Person value from the user prompt",\n'
-        '  "rationale": "one sentence why this mechanic fits this person",\n'
+        '  "rationale": "one biographical sentence connecting the person to the mechanic",\n'
         '  "ability_text": "...",\n'
         '  "nemesis": null\n'
         "}"
     )
 
 
-def build_user_prompt(spec: dict, summary: str) -> str:
+def build_user_prompt(spec: dict, summary: str, avoid_effects: Optional[set[str]] = None) -> str:
     rarity = str(spec.get("rarity", "COMMON")).upper()
     few_shot = _gwent_few_shot(rarity)
     few_shot_block = ""
@@ -888,13 +1204,19 @@ Write ability_text using only WikiDeck terms: HP, BLEEDING, VITALITY,
 POISON, SHIELD, IMMUNITY, LOCK, VEIL, cards.
 """
 
+    avoid = set(avoid_effects or ())
+    avoid_block = ""
+    if avoid:
+        avoid_block = f"\nFORBIDDEN effects (do NOT pick these): {sorted(avoid)}\n"
+
     return f"""Person: {spec['title']}
 Required title echo: {spec['title']}
 Summary: {summary[:_summary_max_chars()]}
 Epoch: {spec['epoch']}
+Archetype: {spec.get('archetype', 'SCHOLAR')}
 Mechanic: {spec['trigger']} -> {spec['effect_type']}
 REQUIRED effect in ability_text: {spec['effect_type']}
-Ability value: {spec['ability_value']}
+Ability value: {spec['ability_value']}{avoid_block}
 
 Examples of correct ability_text for different mechanics:
 DAMAGE: "Deal 2 damage to one enemy card."
@@ -960,7 +1282,7 @@ def _validate_spec(spec: dict) -> tuple[bool, list[str]]:
         return False, [str(exc)]
 
 
-def _generate_flavor(spec: dict, summary: str, retries: int = 4) -> dict:
+def _generate_flavor(spec: dict, summary: str, retries: int = 4, avoid_effects: Optional[set[str]] = None) -> dict:
     global _OLLAMA_RUNTIME_AVAILABLE, _OLLAMA_DOWN_NOTIFIED
     fallback = {
         "title": spec["title"],
@@ -982,16 +1304,20 @@ def _generate_flavor(spec: dict, summary: str, retries: int = 4) -> dict:
             return fallback
 
     previous_errors: list[str] = []
+    base_temp = get_float("ai.temperature")
     for attempt in range(1, retries + 1):
-        user_prompt = build_user_prompt(spec, summary)
+        user_prompt = build_user_prompt(spec, summary, avoid_effects=avoid_effects)
         if previous_errors:
             error_lines = "\n".join(f"- {item}" for item in previous_errors[-3:])
             user_prompt += f"\n\nPrevious issues to fix:\n{error_lines}"
+        # Ramp temperature on each retry so the model breaks out of repeated
+        # near-identical responses. +0.12 per retry, capped at 1.2.
+        attempt_temp = min(1.2, base_temp + 0.12 * (attempt - 1))
         try:
             chat_payload = {
                 "model": _ollama_model_setting(),
                 "format": "json",
-                "options": {"temperature": get_float("ai.temperature")},
+                "options": {"temperature": attempt_temp},
                 "messages": [
                     {"role": "system", "content": build_system_prompt()},
                     {"role": "user", "content": user_prompt},
@@ -1025,11 +1351,19 @@ def _generate_flavor(spec: dict, summary: str, retries: int = 4) -> dict:
                 )
                 continue
 
+            # Sanitize the LLM text (word-numbers → digits, value-injection)
+            # BEFORE validating so cosmetic-only issues like "two cards" don't
+            # waste retries.
+            cleaned_text = sanitize_ability_text_value(
+                parsed["ability_text"], int(spec["ability_value"])
+            )
             candidate = dict(spec)
-            candidate["ability_text"] = parsed["ability_text"]
+            candidate["ability_text"] = cleaned_text
             candidate["nemesis"] = parsed["nemesis"]
             valid, errors = _validate_spec(candidate)
             if valid:
+                # Propagate cleaned text back so callers don't re-sanitize.
+                parsed["ability_text"] = cleaned_text
                 return parsed
             previous_errors.extend(errors)
             print(f"[ai] invalid response for {spec['title']}: {errors}", flush=True)
@@ -1061,6 +1395,37 @@ def _generate_flavor(spec: dict, summary: str, retries: int = 4) -> dict:
 
     print(f"[ai] retries exhausted, fallback used for {spec['title']}", flush=True)
     return fallback
+
+
+_RATIONALE_MECHANIC_WORDS = re.compile(
+    r"\b(damage|heal|hp|vitality|bleeding|poison|shield|immunity|lock|veil|"
+    r"doomed|duel|clash|draw|discard|revive|deploy|order|deathwish|deathblow|"
+    r"timer|enemy card|allied card)\b",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_rationale(raw: str, title: str) -> str:
+    """Trim, strip mechanic leaks, and reject if too short or has the card name."""
+    text = " ".join(str(raw or "").split()).strip().strip('"“”').strip()
+    if not text:
+        return ""
+    # If model wrote the card name into the flavor — too on-the-nose, drop it.
+    name_low = title.strip().lower()
+    if name_low and name_low in text.lower():
+        return ""
+    # If the model leaked mechanical vocab into flavor — keep the sentence
+    # only if it's still readable without those words. Otherwise drop it,
+    # the engine will leave the flavor field empty.
+    if _RATIONALE_MECHANIC_WORDS.search(text):
+        return ""
+    # Cap word count.
+    words = text.split()
+    if len(words) > 22:
+        text = " ".join(words[:22]).rstrip(",.;:") + "."
+    if not text.endswith((".", "!", "?")):
+        text += "."
+    return text
 
 
 def _balance_card(spec: dict) -> dict:
@@ -1151,17 +1516,27 @@ def generate_card_spec(
             diversity,
             avoid_effects=avoid_effects,
         )
-        flavor = _generate_flavor(spec, summary)
-        spec["rationale"] = flavor["rationale"]
+        # Surface avoid list to the LLM prompt so retries differ visibly.
+        flavor = _generate_flavor(spec, summary, avoid_effects=avoid_effects)
+        spec["rationale"] = _sanitize_rationale(flavor.get("rationale", ""), spec["title"])
         spec["ability_text"] = sanitize_ability_text_value(flavor["ability_text"], int(spec["ability_value"]))
         spec["nemesis"] = flavor["nemesis"]
 
         valid, errors = _validate_spec(spec)
         if not valid:
-            if attempt >= 6:
-                raise ValueError(f"Invalid card contract for {title}: {errors}")
-            print(f"[gen] retry {attempt}/6 invalid: {title} -> {errors[0]}", flush=True)
-            continue
+            if attempt < 6:
+                print(f"[gen] retry {attempt}/6 invalid: {title} -> {errors[0]}", flush=True)
+                continue
+            # Last attempt: rebuild ability_text from template so the engine
+            # gets correct mechanical text. We keep rationale (flavor) intact.
+            spec["ability_text"] = _with_trigger_context(
+                spec["trigger"],
+                _ability_text_template(spec["effect_type"], int(spec["ability_value"])),
+            )
+            valid, errors = _validate_spec(spec)
+            if not valid:
+                raise ValueError(f"Invalid card contract for {title} after template fallback: {errors}")
+            print(f"[gen] template fallback used for {title} (LLM text was invalid).", flush=True)
 
         if not diversity_allows(diversity, spec):
             if attempt < 6:

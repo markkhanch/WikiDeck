@@ -84,12 +84,12 @@ GAMEPLAY_SUPPORTED_TRIGGERS = ALLOWED_TRIGGERS
 NUMBERED_EFFECTS = {
     "DAMAGE",
     "BLEEDING",
-    "POISON",
     "VITALITY",
     "DRAW",
     "DISCARD",
 }
 NUMBERLESS_EFFECTS = {
+    "POISON",
     "DESTROY",
     "BANISH",
     "HEAL",
@@ -157,8 +157,36 @@ def normalize_nemesis(value: object) -> Optional[str]:
     return trimmed
 
 
+# Map English number words to digits so LLM responses with "two cards" still
+# pass the numeric-value contract check.
+_WORD_NUMBERS: dict[str, str] = {
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+    "ten": "10", "eleven": "11", "twelve": "12",
+}
+_WORD_NUMBER_RE = re.compile(
+    r"\b(" + "|".join(_WORD_NUMBERS.keys()) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _replace_word_numbers_with_digits(text: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        return _WORD_NUMBERS[match.group(1).lower()]
+    return _WORD_NUMBER_RE.sub(repl, text)
+
+
 def sanitize_ability_text_value(text: str, value: int) -> str:
     if not text:
+        return text
+    # First, convert English number-words ("two") to digits so the regex can match.
+    text = _replace_word_numbers_with_digits(text)
+    # If the LLM omitted a number entirely but the effect needs one, inject it
+    # in front of the first "card"/"cards" token so the result still reads well.
+    if not _FIRST_INT_RE.search(text):
+        injected = re.sub(r"\b(cards?|enemy|allied)\b", f"{value} \\1", text, count=1)
+        if injected != text:
+            return injected
         return text
     return _FIRST_INT_RE.sub(str(value), text, count=1)
 

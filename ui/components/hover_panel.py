@@ -27,7 +27,7 @@ from config import (
     THEME_COLORS,
     RARITY_COLORS,
 )
-from core.card import Card
+from core.card import ARCHETYPE_COLORS, Card
 from core.effects import Effect, EFFECT_LABEL
 from ui.effects import draw_drop_shadow, draw_glow
 
@@ -309,11 +309,15 @@ def draw_hover_panel(
     rarity_color = RARITY_COLORS.get(card.rarity, MUTED_TEXT)
 
     bx = cx
-    for text, color in (
+    badges: list[tuple[str, tuple[int, int, int]]] = [
         (card.theme, theme_color),
         (card.rarity, rarity_color),
         (f"HP {card.hp}", NEON_GREEN),
-    ):
+    ]
+    archetype = (card.archetype or "").upper()
+    if archetype in ARCHETYPE_COLORS:
+        badges.append((archetype, ARCHETYPE_COLORS[archetype]))
+    for text, color in badges:
         bw, bh = _draw_badge(screen, badge_font, text, color, (bx, cy))
         bx += bw + 4
         if bx + 60 > panel.right - PAD:  # wrap to next line if needed
@@ -337,6 +341,16 @@ def draw_hover_panel(
                 screen.blit(note, (cx, cy))
                 cy += note.get_height() + 2
         cy += 4
+
+    # Rationale — biographical flavor line, italic.
+    rationale = (card.rationale or "").strip()
+    if rationale:
+        flavor_font = pygame.font.SysFont("arial", 13, italic=True)
+        for line in _wrap(f'"{rationale}"', flavor_font, text_w):
+            surf = flavor_font.render(line, True, MUTED_TEXT)
+            screen.blit(surf, (cx, cy))
+            cy += surf.get_height() + 1
+        cy += 6
 
     if not has_ability_text:
         for label, eff in (("DEPLOY", card.on_play), ("DEATHWISH", card.on_death)):

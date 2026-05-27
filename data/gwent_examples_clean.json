@@ -1,0 +1,296 @@
+[
+  {
+    "name": "Merigold's Hailstorm",
+    "power": 0,
+    "provision": 8,
+    "rarity": "Epic",
+    "ability": "Damage 5 enemy units by 2."
+  },
+  {
+    "name": "Stammelford's Tremors",
+    "power": 0,
+    "provision": 6,
+    "rarity": "Common",
+    "ability": "Damage all enemy units by 1."
+  },
+  {
+    "name": "Dimeritium Bomb",
+    "power": 0,
+    "provision": 4,
+    "rarity": "Common",
+    "ability": "Damage a unit by 4 and give it Veil."
+  },
+  {
+    "name": "Manticore Venom",
+    "power": 0,
+    "provision": 8,
+    "rarity": "Epic",
+    "ability": "Damage 3 enemy units by 3."
+  },
+  {
+    "name": "Dimeritium Shackles",
+    "power": 0,
+    "provision": 4,
+    "rarity": "Common",
+    "ability": "Lock a unit and damage it by 3."
+  },
+  {
+    "name": "Síle de Tansarville",
+    "power": 5,
+    "provision": 6,
+    "rarity": "Epic",
+    "ability": "Deploy: Damage an enemy unit by 2. Order: Damage an enemy unit by 2."
+  },
+  {
+    "name": "Ballista",
+    "power": 4,
+    "provision": 4,
+    "rarity": "Common",
+    "ability": "Deploy: Damage an enemy unit by 1.  Order: Damage an enemy unit by 2."
+  },
+  {
+    "name": "Gaunter O'Dimm",
+    "power": 6,
+    "provision": 10,
+    "rarity": "Legendary",
+    "ability": "Deploy: Give an enemy unit Doomed. Order: Destroy a Doomed enemy unit."
+  },
+  {
+    "name": "Dol Blathanna Bomber",
+    "power": 2,
+    "provision": 4,
+    "rarity": "Common",
+    "ability": "Deploy: Damage 2 random enemy units by 2."
+  },
+  {
+    "name": "Birna Bran",
+    "power": 6,
+    "provision": 8,
+    "rarity": "Legendary",
+    "ability": "Deploy: Draw up to 2 cards, then Discard the same number of cards."
+  },
+  {
+    "name": "Blueboy Lugos",
+    "power": 7,
+    "provision": 7,
+    "rarity": "Epic",
+    "ability": "Whenever this unit takes damage, damage a random enemy unit by 2."
+  },
+  {
+    "name": "Djenge Frett",
+    "power": 7,
+    "provision": 6,
+    "rarity": "Epic",
+    "ability": "Deploy (Bloodthirst 1): Lock an enemy unit."
+  },
+  {
+    "name": "Donar an Hindar",
+    "power": 5,
+    "provision": 7,
+    "rarity": "Epic",
+    "ability": "Deploy: Damage an enemy unit by 2. Bloodthirst 2: Damage an enemy unit by 4 instead."
+  },
+  {
+    "name": "Svalblod Butcher",
+    "power": 5,
+    "provision": 4,
+    "rarity": "Common",
+    "ability": "Deploy: Damage an allied unit by 2, then give an enemy unit Bleeding (3)."
+  },
+  {
+    "name": "Gutting Slash",
+    "power": 0,
+    "provision": 4,
+    "rarity": "Rare",
+    "ability": "Damage a unit by 4. Bloodthirst 2: Damage by 6 instead."
+  },
+  {
+    "name": "Raging Bear",
+    "power": 9,
+    "provision": 5,
+    "rarity": "Rare",
+    "ability": "Deploy: Damage an allied unit by 2."
+  },
+  {
+    "name": "Pyrotechnician",
+    "power": 4,
+    "provision": 4,
+    "rarity": "Common",
+    "ability": "Order: Damage a random enemy unit and self by 4."
+  },
+  {
+    "name": "Rotfiend",
+    "power": 5,
+    "provision": 5,
+    "rarity": "Common",
+    "ability": "Deathwish: Damage a random enemy unit by 5."
+  },
+  {
+    "name": "Heymaey Spearmaiden",
+    "power": 7,
+    "provision": 4,
+    "rarity": "Common",
+    "ability": "Deploy: Damage an enemy unit by 2, then damage self by 2."
+  },
+  {
+    "name": "Harald's Pal",
+    "power": 1,
+    "provision": 0,
+    "rarity": "Common",
+    "ability": "Doomed. Deathwish: Damage a random enemy unit by 2."
+  },
+  {
+    "name": "Forktail",
+    "power": 5,
+    "provision": 4,
+    "rarity": "Common",
+    "ability": "Deploy: Damage all other units by 1."
+  },
+  {
+    "name": "Watchman",
+    "power": 5,
+    "provision": 5,
+    "rarity": "Rare",
+    "ability": "Shield. Order: Give an allied unit a Shield."
+  },
+  {
+    "name": "Northern Wind",
+    "power": 0,
+    "provision": 5,
+    "rarity": "Common",
+    "ability": "Damage a unit by 4. Deathblow: Banish it."
+  },
+  {
+    "name": "Undying Thirst",
+    "power": 0,
+    "provision": 4,
+    "rarity": "Common",
+    "ability": "Give an enemy unit Bleeding (6)."
+  },
+  {
+    "name": "Alp",
+    "power": 4,
+    "provision": 5,
+    "rarity": "Common",
+    "ability": "Deploy: Give an enemy unit Bleeding (3). Order: Give an enemy unit Bleeding (3)."
+  },
+  {
+    "name": "Fangs of the Empire",
+    "power": 4,
+    "provision": 4,
+    "rarity": "Common",
+    "ability": "Deploy: Poison an enemy unit."
+  },
+  {
+    "name": "Champion of Svalblod",
+    "power": 12,
+    "provision": 7,
+    "rarity": "Epic",
+    "ability": "Order: Destroy an allied unit, then Heal self."
+  },
+  {
+    "name": "Pugo Boom-Breaker",
+    "power": 12,
+    "provision": 7,
+    "rarity": "Epic",
+    "ability": "Deploy: Damage a random allied unit by 3. If there are no allied units, damage self by 5 instead."
+  },
+  {
+    "name": "Philippa: Blind Fury",
+    "power": 1,
+    "provision": 9,
+    "rarity": "Legendary",
+    "ability": "Deploy: Damage an enemy unit by 4, then damage a random enemy unit by 3, then 2, then 1."
+  },
+  {
+    "name": "Saer Qu'an",
+    "power": 2,
+    "provision": 8,
+    "rarity": "Epic",
+    "ability": "Deploy: Damage an enemy unit by the number of units you control."
+  },
+  {
+    "name": "King Cobra",
+    "power": 3,
+    "provision": 4,
+    "rarity": "Common",
+    "ability": "Deploy: Poison an enemy unit."
+  },
+  {
+    "name": "Basilisk Venom",
+    "power": 0,
+    "provision": 0,
+    "rarity": "Legendary",
+    "ability": "Order: Poison a unit."
+  },
+  {
+    "name": "Ceremonial Dagger",
+    "power": 0,
+    "provision": 0,
+    "rarity": "Legendary",
+    "ability": "Order: Damage an enemy unit by 3 and give it Bleeding (2)."
+  },
+  {
+    "name": "Urn of Shadows",
+    "power": 0,
+    "provision": 0,
+    "rarity": "Legendary",
+    "ability": "Order: Trigger an allied unit's Deathwish ability."
+  },
+  {
+    "name": "Collar",
+    "power": 0,
+    "provision": 0,
+    "rarity": "Legendary",
+    "ability": "Order: Lock an enemy unit and damage it by 3."
+  },
+  {
+    "name": "Will o' the wisp",
+    "power": 0,
+    "provision": 5,
+    "rarity": "Rare",
+    "ability": "Destroy a Doomed unit."
+  },
+  {
+    "name": "Red Mutagen",
+    "power": 0,
+    "provision": 0,
+    "rarity": "Common",
+    "ability": "Damage an enemy unit by 4."
+  },
+  {
+    "name": "Yennefer's Illusion",
+    "power": 4,
+    "provision": 0,
+    "rarity": "Legendary",
+    "ability": "Doomed. When this unit takes damage, destroy self."
+  },
+  {
+    "name": "Curse of Envy",
+    "power": 0,
+    "provision": 0,
+    "rarity": "Legendary",
+    "ability": "Order: Damage all enemy units by 1."
+  },
+  {
+    "name": "Ace up the Sleeve",
+    "power": 0,
+    "provision": 0,
+    "rarity": "Legendary",
+    "ability": "Doomed. Damage an enemy unit by 2."
+  },
+  {
+    "name": "Bernard Loredo",
+    "power": 5,
+    "provision": 7,
+    "rarity": "Epic",
+    "ability": "Order: Duel a random enemy unit."
+  },
+  {
+    "name": "Onager",
+    "power": 4,
+    "provision": 7,
+    "rarity": "Common",
+    "ability": "Whenever you use an Order ability, damage a random enemy unit by 1."
+  }
+]

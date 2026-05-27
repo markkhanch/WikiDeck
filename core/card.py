@@ -14,6 +14,24 @@ from core.effects import Effect
 from ui.effects import draw_drop_shadow, draw_glow
 
 
+ARCHETYPE_COLORS: dict[str, tuple[int, int, int]] = {
+    "WARRIOR":  (220,  80,  80),   # red
+    "TYRANT":   (155,  50, 175),   # purple
+    "HEALER":   ( 90, 200, 130),   # green
+    "SCHOLAR":  ( 90, 160, 230),   # blue
+    "ARTIST":   (240, 170,  70),   # amber
+    "DIPLOMAT": (200, 200, 110),   # pale yellow
+}
+ARCHETYPE_SHORT: dict[str, str] = {
+    "WARRIOR":  "WAR",
+    "TYRANT":   "TYR",
+    "HEALER":   "HEA",
+    "SCHOLAR":  "SCH",
+    "ARTIST":   "ART",
+    "DIPLOMAT": "DIP",
+}
+
+
 def _draw_text_with_shadow(
     surface: pygame.Surface,
     font: pygame.font.Font,
@@ -85,6 +103,8 @@ class Card:
     trigger_value: int = 0
     effect_type: str = "NONE"
     ability_value: int = 0
+    archetype: str = ""     # WARRIOR / SCHOLAR / HEALER / TYRANT / ARTIST / DIPLOMAT
+    rationale: str = ""     # one-line biographical flavor connecting person to mechanic
     max_hp: int = 0
     graveyard_eligible: bool = False
     statuses: dict[str, int | bool] = field(default_factory=dict)
@@ -186,6 +206,18 @@ class Card:
         pygame.draw.rect(surface, NEON_RED, hp_rect, width=1)
         hp_surf = font_stat.render(f"HP{self.hp}", True, NEON_RED)
         surface.blit(hp_surf, hp_surf.get_rect(center=hp_rect.center))
+
+        # Archetype badge top-right.
+        archetype = (self.archetype or "").upper()
+        if archetype in ARCHETYPE_COLORS:
+            arch_color = ARCHETYPE_COLORS[archetype]
+            short = ARCHETYPE_SHORT[archetype]
+            arch_rect = pygame.Rect(inner.right - 36, inner.y + 4, 32, 14)
+            pygame.draw.rect(surface, BG_DARK, arch_rect)
+            pygame.draw.rect(surface, arch_color, arch_rect, width=1)
+            font_arch = pygame.font.SysFont("arial", 8, bold=True)
+            arch_surf = font_arch.render(short, True, arch_color)
+            surface.blit(arch_surf, arch_surf.get_rect(center=arch_rect.center))
 
         # Status strip above title if statuses are active.
         status_labels: list[str] = []

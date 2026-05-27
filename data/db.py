@@ -9,6 +9,7 @@ Both caches are write-through: miss → fetch from Wikipedia → save → return
 Network failures fall through silently so the game can run offline once the
 starter deck is warmed up.
 """
+import io
 import os
 import re
 import sqlite3
@@ -16,9 +17,17 @@ from urllib.parse import urlparse
 from typing import Optional
 
 import pygame
+import requests
 
 from config import CARD_IMAGES_DIR, DB_PATH
-from data.wikipedia import get_article, load_card_image
+from data.wikipedia import HEADERS as _WIKI_HEADERS
+from data.wikipedia import TIMEOUT as _WIKI_TIMEOUT
+from data.wikipedia import fetch_media_image_url, get_article, load_card_image
+
+try:
+    from PIL import Image as _PILImage
+except ImportError:  # pragma: no cover
+    _PILImage = None
 
 
 _SAFE_CHARS = re.compile(r"[^A-Za-z0-9_-]+")
@@ -95,6 +104,8 @@ def init_db() -> None:
                 nemesis       TEXT,
                 hp            INTEGER NOT NULL,
                 base_score    INTEGER NOT NULL,
+                archetype     TEXT,
+                rationale     TEXT,
                 generated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (title, rarity)
             )
@@ -152,6 +163,13 @@ def init_db() -> None:
             """
         )
 
+        # Add archetype + rationale columns on older databases.
+        existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(cards)").fetchall()}
+        if "archetype" not in existing_cols:
+            conn.execute("ALTER TABLE cards ADD COLUMN archetype TEXT")
+        if "rationale" not in existing_cols:
+            conn.execute("ALTER TABLE cards ADD COLUMN rationale TEXT")
+
         # Ensure a single active deck exists
         row = conn.execute("SELECT id FROM decks WHERE is_active = 1 LIMIT 1").fetchone()
         if row is None:
@@ -177,6 +195,11 @@ def _get_article_from_db(title: str) -> Optional[dict]:
         "extract":     row["extract"],
         "thumbnail":   row["thumbnail_url"],
     }
+
+
+def get_cached_article(title: str) -> Optional[dict]:
+    """Return cached article data only (no network fetch)."""
+    return _get_article_from_db(title)
 
 
 def _save_article(title: str, data: dict) -> None:
@@ -247,6 +270,112 @@ def get_or_fetch_image(title: str, url: Optional[str]) -> Optional[pygame.Surfac
     return surface
 
 
+def get_cached_image(title: str) -> Optional[pygame.Surface]:
+    """Return cached card image only (no network fetch)."""
+    path = os.path.join(CARD_IMAGES_DIR, f"{_sanitize(title)}.png")
+    if not os.path.isfile(path):
+        return None
+    try:
+        surface = pygame.image.load(path)
+        try:
+            return surface.convert_alpha()
+        except pygame.error:
+            return surface
+    except pygame.error:
+        return None
+
+
+def is_card_image_cached(title: str) -> bool:
+    """True iff a PNG for this title already exists in the image cache."""
+    if not title:
+        return False
+    path = os.path.join(CARD_IMAGES_DIR, f"{_sanitize(title)}.png")
+    return os.path.isfile(path)
+
+
+def _fetch_image_bytes(url: str) -> Optional[bytes]:
+    """Download image bytes with retry/backoff on 429/5xx. Returns None on failure."""
+    import time as _time
+
+    for attempt in range(5):
+        try:
+            response = requests.get(url, headers=_WIKI_HEADERS, timeout=_WIKI_TIMEOUT)
+        except requests.RequestException:
+            _time.sleep(0.5 * (attempt + 1))
+            continue
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            try:
+                delay = int(retry_after) if retry_after else 1
+            except ValueError:
+                delay = 1
+            _time.sleep(min(6, max(1, delay)) * (attempt + 1))
+            continue
+        if response.status_code >= 500:
+            _time.sleep(0.8 * (attempt + 1))
+            continue
+        if response.status_code != 200:
+            return None
+        ctype = response.headers.get("Content-Type", "").lower()
+        if not ctype.startswith("image/"):
+            return None
+        if not response.content:
+            return None
+        return response.content
+    return None
+
+
+def _download_image_to_disk(title: str, url: Optional[str]) -> bool:
+    """Download an image and write it as PNG to the card image cache.
+
+    Runs without pygame (thread-safe). Returns True if a file is on disk after
+    the call — either because it already existed or because the download
+    succeeded.
+    """
+    if not title:
+        return False
+    os.makedirs(CARD_IMAGES_DIR, exist_ok=True)
+    path = os.path.join(CARD_IMAGES_DIR, f"{_sanitize(title)}.png")
+    if os.path.isfile(path):
+        return True
+    if not url:
+        return False
+    data = _fetch_image_bytes(url)
+    if not data:
+        return False
+    if _PILImage is not None:
+        try:
+            img = _PILImage.open(io.BytesIO(data))
+            img.load()
+            if img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGBA")
+            img.save(path, format="PNG")
+            return True
+        except Exception:
+            pass
+    try:
+        with open(path, "wb") as fh:
+            fh.write(data)
+        return True
+    except OSError:
+        return False
+
+
+def prefetch_card_assets(title: str) -> None:
+    """Warm article + image cache so later allow_fetch=False builds find them on disk."""
+    data = get_or_fetch_article(title)
+    if data is None:
+        media_url = fetch_media_image_url(title)
+        _download_image_to_disk(title, media_url)
+        return
+    resolved_title = data["title"]
+    thumb = data.get("thumbnail")
+    if _download_image_to_disk(resolved_title, thumb):
+        return
+    media_url = fetch_media_image_url(resolved_title)
+    _download_image_to_disk(resolved_title, media_url)
+
+
 # ---- Generated card cache ----
 
 def _normalize_effect_for_strengthless_mode(effect_type: str) -> str:
@@ -274,6 +403,9 @@ def _row_to_card_spec(row: sqlite3.Row, *, title_override: str | None = None) ->
     effect_type = _normalize_effect_for_strengthless_mode(raw_effect)
     base_value = int(row["ability_value"] or 0)
     ability_value = max(1, base_value) if raw_effect.upper() in {"BOOST", "DRAIN"} else base_value
+    keys = set(row.keys())
+    archetype = (row["archetype"] if "archetype" in keys else "") or ""
+    rationale = (row["rationale"] if "rationale" in keys else "") or ""
     return {
         "title": title_override or row["title"],
         "theme": row["theme"],
@@ -286,6 +418,8 @@ def _row_to_card_spec(row: sqlite3.Row, *, title_override: str | None = None) ->
         "ability_value": ability_value,
         "nemesis": row["nemesis"],
         "hp": row["hp"],
+        "archetype": archetype,
+        "rationale": rationale,
     }
 
 
@@ -294,7 +428,7 @@ def get_cached_card(title: str, rarity: str) -> Optional[dict]:
         row = conn.execute(
             """
             SELECT title, theme, epoch, rarity, trigger, trigger_value, effect_type,
-                   ability_text, ability_value, nemesis, hp
+                   ability_text, ability_value, nemesis, hp, archetype, rationale
             FROM cards
             WHERE title = ? AND rarity = ?
             """,
@@ -310,7 +444,7 @@ def get_fallback_cached_card(title: str, rarity: str) -> Optional[dict]:
         row = conn.execute(
             """
             SELECT title, theme, epoch, rarity, trigger, trigger_value, effect_type,
-                   ability_text, ability_value, nemesis, hp
+                   ability_text, ability_value, nemesis, hp, archetype, rationale
             FROM cards
             WHERE title = ?
             ORDER BY CASE WHEN rarity = ? THEN 0 ELSE 1 END, generated_at DESC
@@ -322,7 +456,7 @@ def get_fallback_cached_card(title: str, rarity: str) -> Optional[dict]:
             row = conn.execute(
                 """
                 SELECT title, theme, epoch, rarity, trigger, trigger_value, effect_type,
-                       ability_text, ability_value, nemesis, hp
+                       ability_text, ability_value, nemesis, hp, archetype, rationale
                 FROM cards
                 WHERE rarity = ?
                 ORDER BY RANDOM()
@@ -334,7 +468,7 @@ def get_fallback_cached_card(title: str, rarity: str) -> Optional[dict]:
             row = conn.execute(
                 """
                 SELECT title, theme, epoch, rarity, trigger, trigger_value, effect_type,
-                       ability_text, ability_value, nemesis, hp
+                       ability_text, ability_value, nemesis, hp, archetype, rationale
                 FROM cards
                 ORDER BY RANDOM()
                 LIMIT 1
@@ -351,8 +485,9 @@ def save_card(card: dict) -> None:
             """
             INSERT OR REPLACE INTO cards
             (title, rarity, theme, epoch, trigger, trigger_value, effect_type,
-             ability_text, ability_value, nemesis, hp, base_score)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ability_text, ability_value, nemesis, hp, base_score,
+             archetype, rationale)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 card.get("title", ""),
@@ -367,8 +502,37 @@ def save_card(card: dict) -> None:
                 card.get("nemesis"),
                 int(card.get("hp", 1)),
                 int(card.get("base_score", 0)),
+                (card.get("archetype") or "") or None,
+                (card.get("rationale") or "") or None,
             ),
         )
+
+
+def get_effect_distribution() -> dict[str, int]:
+    """Return effect_type -> count across all saved cards."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT effect_type, COUNT(*) AS n FROM cards GROUP BY effect_type"
+        ).fetchall()
+    return {str(r["effect_type"]): int(r["n"]) for r in rows}
+
+
+def get_trigger_distribution() -> dict[str, int]:
+    """Return trigger -> count across all saved cards."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT trigger, COUNT(*) AS n FROM cards GROUP BY trigger"
+        ).fetchall()
+    return {str(r["trigger"]): int(r["n"]) for r in rows}
+
+
+def get_archetype_distribution() -> dict[str, int]:
+    """Return archetype -> count across all saved cards (NULL → '')."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT COALESCE(archetype, '') AS a, COUNT(*) AS n FROM cards GROUP BY a"
+        ).fetchall()
+    return {str(r["a"]): int(r["n"]) for r in rows}
 
 
 def get_active_deck_id() -> str:

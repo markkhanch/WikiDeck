@@ -110,7 +110,7 @@ def run_shop(
 ) -> str | None:
     clock = pygame.time.Clock()
     pack_images = _load_pack_images()
-    ensure_shop_singles(min_count=2)
+    ensure_shop_singles(min_count=2, background=True)
 
     active_tab = "boosters"
     pack_counts = {pack_type: 1 for pack_type in PACK_ORDER}
@@ -145,7 +145,7 @@ def run_shop(
             spec = row.get("spec")
             if spec is None:
                 continue
-            singles_cards_cache[int(row["id"])] = build_card_from_spec(spec)
+            singles_cards_cache[int(row["id"])] = build_card_from_spec(spec, allow_fetch=False)
         last_refresh_at = now
 
     refresh_data(force=True)
@@ -159,7 +159,7 @@ def run_shop(
         reveal_step_delay = 0.18 if get_bool("display.animations") else 0.0
         if reveal_queue and now - reveal_last_step >= reveal_step_delay:
             reveal_last_step = now
-            reveal_cards.append(build_card_from_spec(reveal_queue.pop(0)))
+            reveal_cards.append(build_card_from_spec(reveal_queue.pop(0), allow_fetch=False))
 
         close_rect = close_button_rect()
 

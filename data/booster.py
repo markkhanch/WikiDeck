@@ -15,6 +15,8 @@ from data.db import (
     add_to_deck,
     deck_size,
     get_cached_card,
+    is_card_image_cached,
+    prefetch_card_assets,
     save_card,
 )
 from data.ollama_gen import apply_diversity, generate_card_spec, get_article_from_pool
@@ -48,6 +50,8 @@ PACK_DISPLAY_NAMES = {
 SINGLE_PRICES = dict(SINGLE_PRICES_DEFAULT)
 SINGLE_RARITY_WEIGHTS = dict(SINGLE_RARITY_WEIGHTS_DEFAULT)
 _GENERATION_LOCK = threading.Lock()
+_SINGLE_GEN_LOCK = threading.Lock()
+_SINGLE_GEN_INFLIGHT = 0
 
 
 def _connect() -> sqlite3.Connection:
@@ -175,6 +179,11 @@ def _generate_pack_cards(pack_type: str, on_progress=None, pack_size: int | None
         if final_title in used_card_titles:
             continue
 
+        try:
+            prefetch_card_assets(final_title)
+        except Exception as exc:
+            print(f"[shop] image prefetch failed for {final_title}: {exc}", flush=True)
+
         cards.append(spec)
         used_card_titles.add(final_title)
         apply_diversity(diversity, spec)
@@ -293,6 +302,12 @@ def open_pack(pack_id: int) -> list[dict] | None:
         conn.execute("UPDATE pending_packs SET status = 'opened' WHERE id = ?", (pack_id,))
         conn.commit()
 
+    for spec in cards:
+        try:
+            prefetch_card_assets(str(spec.get("title", "")))
+        except Exception as exc:
+            print(f"[shop] image prefetch failed at open: {exc}", flush=True)
+
     add_pack_to_collection_and_deck(cards)
     return cards
 
@@ -308,6 +323,11 @@ def _generate_single_spec() -> dict:
     rarity = _pick_single_rarity()
     title, summary, _ignored_rarity = get_article_from_pool()
     spec = generate_card_spec(title, summary, rarity)
+    final_title = str(spec.get("title", title) or title)
+    try:
+        prefetch_card_assets(final_title)
+    except Exception as exc:
+        print(f"[shop] image prefetch failed for {final_title}: {exc}", flush=True)
     return spec
 
 
@@ -335,11 +355,35 @@ def _generate_single_in_background() -> None:
         print(f"[shop] single card generation failed: {exc}", flush=True)
 
 
-def ensure_shop_singles(min_count: int = 2) -> None:
+def _spawn_single_generation() -> None:
+    global _SINGLE_GEN_INFLIGHT
+
+    def _worker() -> None:
+        global _SINGLE_GEN_INFLIGHT
+        try:
+            _generate_single_in_background()
+        finally:
+            with _SINGLE_GEN_LOCK:
+                _SINGLE_GEN_INFLIGHT = max(0, _SINGLE_GEN_INFLIGHT - 1)
+
+    with _SINGLE_GEN_LOCK:
+        _SINGLE_GEN_INFLIGHT += 1
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def ensure_shop_singles(min_count: int = 2, *, background: bool = True) -> None:
     _ensure_shop_tables()
     with _connect() as conn:
         current = int(conn.execute("SELECT COUNT(*) FROM shop_singles").fetchone()[0])
-    missing = max(0, min_count - current)
+    with _SINGLE_GEN_LOCK:
+        inflight = _SINGLE_GEN_INFLIGHT
+    missing = max(0, min_count - current - inflight)
+    if missing <= 0:
+        return
+    if background:
+        for _ in range(missing):
+            _spawn_single_generation()
+        return
     for _ in range(missing):
         try:
             spec = _generate_single_spec()
@@ -361,10 +405,13 @@ def get_shop_singles() -> list[dict]:
         ).fetchall()
 
     result: list[dict] = []
+    missing_assets: list[str] = []
     for row in rows:
         title = str(row["card_title"])
         rarity = str(row["card_rarity"])
         spec = get_cached_card(title, rarity)
+        if not is_card_image_cached(title):
+            missing_assets.append(title)
         result.append(
             {
                 "id": int(row["id"]),
@@ -375,6 +422,16 @@ def get_shop_singles() -> list[dict]:
                 "spec": spec,
             }
         )
+
+    if missing_assets:
+        def _warm() -> None:
+            for t in missing_assets:
+                try:
+                    prefetch_card_assets(t)
+                except Exception as exc:
+                    print(f"[shop] single image prefetch failed for {t}: {exc}", flush=True)
+        threading.Thread(target=_warm, daemon=True).start()
+
     return result
 
 

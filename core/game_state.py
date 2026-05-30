@@ -348,11 +348,13 @@ class GameState:
         return True
 
     def try_order(self, card: Card) -> bool:
-        """Activate ORDER / ORDER_ZEAL ability once per turn during MAIN."""
-        if self.phase != Phase.MAIN or self.main_action_taken:
-            self.debug(
-                f"ORDER blocked for {card.title}: phase={self.phase.value}, main_action_taken={self.main_action_taken}."
-            )
+        """Activate ORDER / ORDER_ZEAL ability ONCE per game.
+
+        Does NOT consume the main action — the player can fire any number of
+        ORDER abilities in addition to playing or discarding a card this turn.
+        """
+        if self.phase != Phase.MAIN:
+            self.debug(f"ORDER blocked for {card.title}: phase={self.phase.value}.")
             return False
         if self.is_targeting_active():
             self.debug(f"ORDER blocked for {card.title}: targeting is active.")
@@ -367,13 +369,12 @@ class GameState:
         if int(getattr(card, "silenced_turns", 0) or 0) > 0:
             self.debug(f"ORDER blocked for {card.title}: silenced_turns={card.silenced_turns}.")
             return False
-        used_turn = int(getattr(card, "order_used_turn", -1) or -1)
-        if used_turn == self.turn_number:
-            self.debug(f"ORDER blocked for {card.title}: already used this turn.")
+        if bool(getattr(card, "order_used", False)):
+            self.debug(f"ORDER blocked for {card.title}: already used this game.")
             return False
 
-        setattr(card, "order_used_turn", self.turn_number)
-        self.main_action_taken = True
+        setattr(card, "order_used", True)
+        # ORDER is free — does NOT flip main_action_taken.
         self.debug(f"ORDER attempt by {self.active_player.name}: {card.title}")
         msg = apply_effect(card, self, self.active_player)
         if msg:

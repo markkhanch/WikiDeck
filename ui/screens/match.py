@@ -1198,7 +1198,7 @@ def run_match(
         controlling_player = my_player if my_player is not None else active
 
         # Update ORDER-ready flag on every field card so cards render the
-        # ORDER glow only when their ORDER ability can still fire this turn.
+        # ORDER glow only when their ORDER ability can still fire (once per game).
         for _player in game.players:
             for _card in _player.on_field:
                 trig = str(getattr(_card, "ability_trigger", "") or "").strip().upper()
@@ -1208,8 +1208,7 @@ def run_match(
                 if int(getattr(_card, "silenced_turns", 0) or 0) > 0:
                     _card.order_ready = False
                     continue
-                used_turn = int(getattr(_card, "order_used_turn", -1) or -1)
-                _card.order_ready = used_turn != getattr(game, "turn_number", -2)
+                _card.order_ready = not bool(getattr(_card, "order_used", False))
         is_my_turn = (not network_mode) or bool(getattr(network_client, "is_my_turn", False))
         can_interact = (not network_mode) or (my_player is not None and is_my_turn)
         
@@ -1435,21 +1434,52 @@ def run_match(
                     continue
                 if network_mode and not can_interact:
                     continue
-                picked = None
-                for card in reversed(controlling_player.hand):
-                    if card.rect.collidepoint(mx, my):
-                        if game.phase == Phase.MAIN and not game.main_action_taken:
-                            picked = card
-                        else:
-                            game.debug(
-                                f"Input ignored: {controlling_player.name} already used the main action."
-                            )
-                        break
-                if picked is None and not network_mode:
+                # First: clicking on a controlling-player field card with an
+                # unused ORDER ability fires it immediately (targeting opens).
+                # This takes precedence over starting a drag-to-attack.
+                order_fired = False
+                if game.phase == Phase.MAIN and not game.is_targeting_active():
                     for card in reversed(controlling_player.on_field):
-                        if card.rect.collidepoint(mx, my):
-                            picked = card
+                        if not card.rect.collidepoint(mx, my):
+                            continue
+                        trig = str(getattr(card, "ability_trigger", "") or "").strip().upper()
+                        if trig not in {"ORDER", "ORDER_ZEAL"}:
+                            break  # different ability — fall through to drag
+                        if bool(getattr(card, "order_used", False)):
                             break
+                        if int(getattr(card, "silenced_turns", 0) or 0) > 0:
+                            break
+                        if network_mode:
+                            network_client.send(
+                                ORDER_CARD,
+                                {
+                                    "card_title": card.title,
+                                    "card_id": int(getattr(card, "network_id", 0) or 0),
+                                },
+                            )
+                            network_status = f"Activating ORDER: {card.title}..."
+                        elif game.try_order(card):
+                            game.debug(f"Input: click-order {card.title}.")
+                            _relayout(game)
+                        order_fired = True
+                        break
+
+                picked = None
+                if not order_fired:
+                    for card in reversed(controlling_player.hand):
+                        if card.rect.collidepoint(mx, my):
+                            if game.phase == Phase.MAIN and not game.main_action_taken:
+                                picked = card
+                            else:
+                                game.debug(
+                                    f"Input ignored: {controlling_player.name} already used the main action."
+                                )
+                            break
+                    if picked is None and not network_mode:
+                        for card in reversed(controlling_player.on_field):
+                            if card.rect.collidepoint(mx, my):
+                                picked = card
+                                break
                 if picked is not None:
                     dragging_card = picked
                     drag_offset = (picked.rect.x - mx, picked.rect.y - my)

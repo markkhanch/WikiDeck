@@ -9,8 +9,9 @@ from typing import Optional
 
 import pygame
 
-from config import CARD_WIDTH, CARD_HEIGHT, BG_DARK, BG_LIGHT, WHITE_TEXT, NEON_RED, GOLD, THEME_COLORS, RARITY_COLORS
+from config import CARD_WIDTH, CARD_HEIGHT, BG_DARK, BG_LIGHT, WHITE_TEXT, NEON_RED, GOLD, NEON_GREEN, THEME_COLORS, RARITY_COLORS
 from core.effects import Effect
+from core.icons import SUPPORTED_STATUSES, get_status_icon, get_trigger_icon
 from ui.effects import draw_drop_shadow, draw_glow
 
 
@@ -219,27 +220,129 @@ class Card:
             arch_surf = font_arch.render(short, True, arch_color)
             surface.blit(arch_surf, arch_surf.get_rect(center=arch_rect.center))
 
-        # Status strip above title if statuses are active.
-        status_labels: list[str] = []
-        for name in sorted(self.statuses):
-            value = self.statuses[name]
+        # Status / ORDER icon strip above the title.
+        # Only renders if there's something to show — keeps card clean otherwise.
+        self._draw_status_strip(surface, inner, bottom_band_h)
+
+    def _status_stacks(self) -> list[tuple[str, int]]:
+        """Return [(STATUS_NAME, stack_count), ...] for statuses to surface.
+
+        Booleans become count=1. Zero/missing statuses are filtered out.
+        Order matches SUPPORTED_STATUSES so the strip layout is stable.
+        """
+        raw = self.statuses or {}
+        out: list[tuple[str, int]] = []
+        for name in SUPPORTED_STATUSES:
+            value = raw.get(name, 0)
             if isinstance(value, bool):
                 if value:
-                    status_labels.append(name)
+                    out.append((name, 1))
                 continue
-            if int(value) > 1:
-                status_labels.append(f"{name}:{int(value)}")
-            elif int(value) == 1:
-                status_labels.append(name)
-        if self.silenced_turns > 0:
-            status_labels.append(f"SIL:{self.silenced_turns}")
-        if status_labels:
-            badge_font = pygame.font.SysFont("arial", 9, bold=True)
-            display = ", ".join(status_labels[:2])
-            if len(status_labels) > 2:
-                display += f" +{len(status_labels) - 2}"
-            badge_rect = pygame.Rect(inner.x + 4, inner.bottom - bottom_band_h - 11, inner.width - 8, 10)
-            pygame.draw.rect(surface, BG_DARK, badge_rect)
-            pygame.draw.rect(surface, GOLD, badge_rect, width=1)
-            status_surf = badge_font.render(display, True, GOLD)
-            surface.blit(status_surf, (badge_rect.x + 2, badge_rect.y))
+            try:
+                n = int(value)
+            except Exception:
+                n = 0
+            if n > 0:
+                out.append((name, n))
+        return out
+
+    def _draw_status_strip(
+        self,
+        surface: pygame.Surface,
+        inner: pygame.Rect,
+        bottom_band_h: int,
+    ) -> None:
+        stacks = self._status_stacks()
+        order_ready = bool(getattr(self, "order_ready", False))
+        if not stacks and not order_ready:
+            return
+
+        # Strip sits in the band just above the title strip.
+        strip_h = 14
+        icon_size = 11
+        gap = 1
+        strip_top = inner.bottom - bottom_band_h - strip_h - 1
+        slot_x = inner.x + 3
+        slot_w = icon_size + 2
+        right_limit = inner.right - 4
+        label_font = pygame.font.SysFont("arial", 7, bold=True)
+
+        # ORDER indicator first (left edge), glows green when usable.
+        if order_ready:
+            self._draw_strip_icon(
+                surface,
+                slot_x,
+                strip_top,
+                icon_size,
+                strip_h,
+                trigger_name="ORDER",
+                fallback_letter="O",
+                border_color=NEON_GREEN,
+            )
+            slot_x += slot_w + 2  # extra breathing room before statuses
+
+        for idx, (name, count) in enumerate(stacks):
+            # If next slot won't fit, show "+N" overflow chip and stop.
+            remaining = len(stacks) - idx
+            if slot_x + slot_w > right_limit and remaining > 0:
+                overflow = label_font.render(f"+{remaining}", True, GOLD)
+                surface.blit(
+                    overflow,
+                    (right_limit - overflow.get_width(), strip_top + strip_h - overflow.get_height() - 1),
+                )
+                break
+            self._draw_strip_icon(
+                surface,
+                slot_x,
+                strip_top,
+                icon_size,
+                strip_h,
+                status_name=name,
+                fallback_letter=name[:1],
+                border_color=GOLD,
+            )
+            if count > 1:
+                num_surf = label_font.render(str(count), True, WHITE_TEXT)
+                # Tiny pill behind the count so it reads on any artwork colour.
+                pill = pygame.Rect(
+                    slot_x + slot_w - num_surf.get_width() - 1,
+                    strip_top + strip_h - num_surf.get_height() - 1,
+                    num_surf.get_width() + 2,
+                    num_surf.get_height() + 1,
+                )
+                pygame.draw.rect(surface, BG_DARK, pill)
+                pygame.draw.rect(surface, GOLD, pill, width=1)
+                surface.blit(num_surf, (pill.x + 1, pill.y))
+            slot_x += slot_w + gap
+
+    @staticmethod
+    def _draw_strip_icon(
+        surface: pygame.Surface,
+        x: int,
+        y: int,
+        icon_size: int,
+        strip_h: int,
+        *,
+        status_name: str | None = None,
+        trigger_name: str | None = None,
+        fallback_letter: str = "?",
+        border_color: tuple[int, int, int] = GOLD,
+    ) -> None:
+        # Background slot with thin border in the strip colour.
+        slot_rect = pygame.Rect(x, y, icon_size + 2, strip_h)
+        pygame.draw.rect(surface, BG_DARK, slot_rect)
+        pygame.draw.rect(surface, border_color, slot_rect, width=1)
+
+        icon: pygame.Surface | None = None
+        if status_name is not None:
+            icon = get_status_icon(status_name, size=icon_size)
+        elif trigger_name is not None:
+            icon = get_trigger_icon(trigger_name, size=icon_size)
+
+        if icon is not None:
+            surface.blit(icon, (x + 1, y + (strip_h - icon_size) // 2))
+        else:
+            # Text fallback: first letter of the status name.
+            font = pygame.font.SysFont("arial", icon_size - 2, bold=True)
+            letter = font.render(fallback_letter, True, border_color)
+            surface.blit(letter, letter.get_rect(center=slot_rect.center))

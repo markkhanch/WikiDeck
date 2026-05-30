@@ -448,6 +448,8 @@ def _draw_side_piles(
     can_interact: bool,
     mx: int,
     my: int,
+    discard_drop_idx: int | None = None,
+    discard_drop_hot: bool = False,
 ) -> tuple[Card | None, pygame.FRect | None]:
     hovered_card: Card | None = None
     hovered_anchor: pygame.FRect | None = None
@@ -462,8 +464,16 @@ def _draw_side_piles(
             can_interact=can_interact,
         )
 
+        # Highlight own discard pile when a card is being dragged toward it.
+        is_drop_target = discard_drop_idx is not None and idx == discard_drop_idx
+        if is_drop_target:
+            border_color = NEON_GREEN if discard_drop_hot else NEON_RED
+            border_w = 3 if discard_drop_hot else 2
+        else:
+            border_color = NEON_RED
+            border_w = 1
         pygame.draw.rect(screen, BG_MID, discard_rect)
-        pygame.draw.rect(screen, NEON_RED, discard_rect, width=1)
+        pygame.draw.rect(screen, border_color, discard_rect, width=border_w)
         if player.discard:
             top_discard = _draw_card_snapshot(screen, player.discard[-1], discard_rect)
             if discard_rect.collidepoint(mx, my):
@@ -1186,6 +1196,20 @@ def run_match(
         active = game.active_player
         my_player = _player_for_role(game, my_role) if network_mode else active
         controlling_player = my_player if my_player is not None else active
+
+        # Update ORDER-ready flag on every field card so cards render the
+        # ORDER glow only when their ORDER ability can still fire this turn.
+        for _player in game.players:
+            for _card in _player.on_field:
+                trig = str(getattr(_card, "ability_trigger", "") or "").strip().upper()
+                if trig not in {"ORDER", "ORDER_ZEAL"}:
+                    _card.order_ready = False
+                    continue
+                if int(getattr(_card, "silenced_turns", 0) or 0) > 0:
+                    _card.order_ready = False
+                    continue
+                used_turn = int(getattr(_card, "order_used_turn", -1) or -1)
+                _card.order_ready = used_turn != getattr(game, "turn_number", -2)
         is_my_turn = (not network_mode) or bool(getattr(network_client, "is_my_turn", False))
         can_interact = (not network_mode) or (my_player is not None and is_my_turn)
         
@@ -1522,6 +1546,11 @@ def run_match(
                     opponent = game.opponent
                     if dragging_card in controlling_player.hand:
                         can_play_from_hand = game.phase == Phase.MAIN and not game.main_action_taken
+                        # The controlling player's own pile rects — drop-to-discard target.
+                        controlling_idx = game.players.index(controlling_player)
+                        my_discard_rect, _ = _pile_rects(controlling_idx)
+                        dropped_on_my_discard = my_discard_rect.colliderect(dragging_card.rect)
+
                         if active_field_zone.colliderect(dragging_card.rect) and can_play_from_hand:
                             game.debug(f"Input: drop-to-play {dragging_card.title}.")
                             if network_mode:
@@ -1538,6 +1567,23 @@ def run_match(
                         elif active_field_zone.colliderect(dragging_card.rect):
                             game.debug(
                                 f"Input blocked: play denied for {dragging_card.title} because main action is already used."
+                            )
+                        elif dropped_on_my_discard and can_play_from_hand:
+                            game.debug(f"Input: drop-to-discard {dragging_card.title}.")
+                            if network_mode:
+                                network_client.send(
+                                    DISCARD_CARD,
+                                    {
+                                        "card_title": dragging_card.title,
+                                        "card_id": int(getattr(dragging_card, "network_id", 0) or 0),
+                                    },
+                                )
+                                network_status = f"Discarding {dragging_card.title}..."
+                            else:
+                                game.try_discard(dragging_card)
+                        elif dropped_on_my_discard:
+                            game.debug(
+                                f"Input blocked: discard denied for {dragging_card.title} because main action is already used."
                             )
                         else:
                             game.debug(f"Input: drop canceled for hand card {dragging_card.title}.")
@@ -1600,6 +1646,22 @@ def run_match(
                     _draw_card_back(screen, card.rect, fonts)
             if face_up and hovered_hand_card is not None and hovered_hand_card is not dragging_card:
                 hovered_hand_card.draw(screen)
+        # When the player is dragging a card from their own hand and the main
+        # action is still available, highlight their discard pile as a valid
+        # drop target. Brighten the border once the card overlaps it.
+        discard_drop_idx: int | None = None
+        discard_drop_hot = False
+        if (
+            dragging_card is not None
+            and can_interact
+            and dragging_card in controlling_player.hand
+            and game.phase == Phase.MAIN
+            and not game.main_action_taken
+        ):
+            discard_drop_idx = game.players.index(controlling_player)
+            my_discard_rect, _ = _pile_rects(discard_drop_idx)
+            discard_drop_hot = my_discard_rect.colliderect(dragging_card.rect)
+
         pile_hovered_card, pile_hovered_anchor = _draw_side_piles(
             screen,
             game,
@@ -1609,6 +1671,8 @@ def run_match(
             can_interact=can_interact,
             mx=mx,
             my=my,
+            discard_drop_idx=discard_drop_idx,
+            discard_drop_hot=discard_drop_hot,
         )
         modal_hovered_card: Card | None = None
         modal_hovered_anchor: pygame.FRect | None = None

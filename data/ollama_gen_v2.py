@@ -33,7 +33,7 @@ from data.card_contract import (
     sanitize_ability_text_value,
     validate_card_contract,
 )
-from data.db import get_cached_card, get_fallback_cached_card, init_db, save_card
+from data.db import get_cached_card, init_db, save_card
 from data.historical_people_pool import HISTORICAL_PERSONALITIES
 from data.settings_service import get_bool, get_float, get_int, get_str
 from data.wikipedia import get_article
@@ -68,7 +68,13 @@ def _ollama_max_retries_setting() -> int:
 
 
 def _request_timeout() -> int:
+    """LLM chat timeout (seconds). Long because remote Ollama may cold-start."""
     return max(1, get_int("ai.request_timeout"))
+
+
+# Wikipedia API calls must stay responsive — if a request hangs longer than
+# this we'd lock up generation. Pool walks can hit dozens of titles per pack.
+WIKI_HTTP_TIMEOUT = 10
 
 
 def _summary_min_chars() -> int:
@@ -369,7 +375,7 @@ def _ensure_ollama_runtime() -> bool:
             _log(f"[ai] connected to Ollama at {host}")
             return True
 
-    _log(f"[ai] Ollama not reachable. Checked hosts: {', '.join(_host_candidates())}")
+    _log(f"[ai] Ollama offline (tried {', '.join(_host_candidates())}) — switching to template generator")
     return False
 
 
@@ -380,22 +386,53 @@ def pick_random_rarity(weights: Optional[dict[str, int]] = None) -> str:
     return random.choices(names, weights=probs, k=1)[0]
 
 
+# In-memory cache of Wikipedia "description" (short tagline like
+# "American actor and filmmaker") — used by the archetype classifier.
+_DESCRIPTION_CACHE: dict[str, str] = {}
+
+
 def _fetch_summary_from_api(title: str) -> Optional[str]:
     safe_title = title.replace(" ", "_")
     url = WIKI_SUMMARY_API.format(safe_title)
     try:
-        response = requests.get(url, headers=HEADERS, timeout=_request_timeout())
+        response = requests.get(url, headers=HEADERS, timeout=WIKI_HTTP_TIMEOUT)
         if response.status_code != 200:
             return None
         data = response.json()
         if data.get("type") == "disambiguation":
             return None
+        # Capture the short description while we're here (it costs us nothing
+        # extra — same response). Used later for archetype derivation.
+        desc = (data.get("description") or "").strip()
+        if desc:
+            _DESCRIPTION_CACHE[title] = desc
         extract = (data.get("extract") or "").strip()
         if len(extract) < _summary_min_chars():
             return None
         return extract
     except Exception:
         return None
+
+
+def _get_description(title: str) -> str:
+    """Return Wikipedia short description ('American actor'), cached.
+
+    Tries (1) in-memory cache, (2) SQLite article cache. Returns "" if absent.
+    Does NOT hit the network — relies on the prefetch path having populated it.
+    """
+    cached = _DESCRIPTION_CACHE.get(title)
+    if cached is not None:
+        return cached
+    try:
+        from data.db import get_cached_article
+        article = get_cached_article(title)
+        if article is not None:
+            desc = str(article.get("description") or "").strip()
+            _DESCRIPTION_CACHE[title] = desc
+            return desc
+    except Exception:
+        pass
+    return ""
 
 
 def _load_historical_pool() -> list[str]:
@@ -525,7 +562,7 @@ def get_monthly_views(title: str) -> int:
     views: Optional[int] = None
     for attempt in range(4):
         try:
-            response = requests.get(url, headers=HEADERS, timeout=_request_timeout())
+            response = requests.get(url, headers=HEADERS, timeout=WIKI_HTTP_TIMEOUT)
         except requests.RequestException:
             time.sleep(0.4 * (attempt + 1))
             continue
@@ -595,6 +632,10 @@ def _extract_person_article_fields(article: dict | None) -> tuple[str, str] | No
         return None
     if not _looks_like_person(article_title, extract):
         return None
+    # Stash the description so _choose_archetype can use it later.
+    desc = str(article.get("description") or "").strip()
+    if desc:
+        _DESCRIPTION_CACHE[article_title] = desc
     return article_title, extract
 
 
@@ -902,12 +943,94 @@ def _weighted_pick(
     return random.choices(keys, weights=vals, k=1)[0]
 
 
-def _choose_archetype(hits: dict[str, int], effect_type: str) -> str:
-    """Pick a thematic archetype from Wikipedia keyword signals.
+# Wikipedia "description" tagline → archetype. Checked in priority order:
+# more specific terms first (so "comedian" wins over generic "actor" — both
+# are ARTIST anyway, but the principle matters for ambiguous descriptors like
+# "philosopher-king" matching SCHOLAR before DIPLOMAT).
+_ARCHETYPE_DESCRIPTION_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # Highly specific roles that should beat their parent terms.
+    ("TYRANT", (
+        "dictator", "tyrant", "despot", "fascist", "war criminal",
+        "terrorist", "assassin", "serial killer", "mass murderer",
+        "warlord", "executioner",
+    )),
+    ("WARRIOR", (
+        "general", "military leader", "military commander", "field marshal",
+        "admiral", "commander", "conqueror", "samurai", "warrior",
+        "soldier", "knight", "gladiator", "marshal", "military officer",
+        "military strategist", "revolutionary",
+    )),
+    ("HEALER", (
+        "physician", "surgeon", "doctor", "nurse", "healer", "midwife",
+        "missionary", "saint", "prophet", "monk", "nun", "preacher",
+        "rabbi", "imam", "spiritual leader", "religious leader",
+        "religious figure", "theologian", "pope",
+    )),
+    ("SCHOLAR", (
+        "philosopher", "scientist", "physicist", "mathematician",
+        "chemist", "biologist", "astronomer", "psychologist",
+        "neurologist", "geologist", "economist", "sociologist",
+        "anthropologist", "historian", "scholar", "academic", "professor",
+        "researcher", "inventor", "engineer", "computer scientist",
+        "logician", "linguist", "archaeologist", "naturalist", "polymath",
+    )),
+    ("ARTIST", (
+        "actor", "actress", "filmmaker", "film director", "director",
+        "producer", "animator", "screenwriter", "comedian", "musician",
+        "singer", "songwriter", "composer", "conductor", "pianist",
+        "violinist", "guitarist", "rapper", "dj", "painter", "sculptor",
+        "poet", "novelist", "writer", "playwright", "author", "dramatist",
+        "dancer", "choreographer", "photographer", "designer",
+        "fashion designer", "architect", "cartoonist", "illustrator",
+        "performer", "artist", "broadcaster", "journalist",
+    )),
+    ("DIPLOMAT", (
+        "politician", "diplomat", "statesman", "stateswoman",
+        "president", "vice president", "prime minister", "chancellor",
+        "ambassador", "senator", "congressman", "congresswoman",
+        "monarch", "king", "queen", "emperor", "empress", "tsar", "shah",
+        "sultan", "caliph", "pharaoh", "head of state", "head of government",
+        "first lady", "activist", "lawyer", "judge", "jurist", "reformer",
+        "abolitionist", "civil rights", "suffragist", "businessman",
+        "businesswoman", "entrepreneur", "industrialist",
+    )),
+)
 
-    Falls back to mapping the chosen effect_type to a class when the article
-    has no strong biographical cues.
+
+def _archetype_from_description(description: str) -> Optional[str]:
+    """Return the first archetype whose keyword set matches the description.
+
+    `description` is a short Wikipedia tagline like 'American animator and film
+    producer'. Returns None if nothing matches.
     """
+    if not description:
+        return None
+    low = description.lower()
+    for archetype, keywords in _ARCHETYPE_DESCRIPTION_KEYWORDS:
+        for kw in keywords:
+            if kw in low:
+                return archetype
+    return None
+
+
+def _choose_archetype(
+    hits: dict[str, int],
+    effect_type: str,
+    description: str = "",
+) -> str:
+    """Pick a thematic archetype for a card.
+
+    Priority:
+      1. Wikipedia description keywords ("American actor" -> ARTIST).
+      2. Keyword signals from the article summary.
+      3. Mapping from the chosen effect_type.
+    """
+    # 1) Description is the most reliable signal — try it first.
+    from_desc = _archetype_from_description(description)
+    if from_desc is not None:
+        return from_desc
+
+    # 2) Fall back to summary keyword tally.
     war = hits.get("war", 0)
     assassin = hits.get("assassin", 0) + hits.get("collapse", 0)
     medicine = hits.get("medicine", 0) + hits.get("disease", 0)
@@ -931,7 +1054,7 @@ def _choose_archetype(hits: dict[str, int], effect_type: str) -> str:
             if scores[arch] == top:
                 return arch
 
-    # Fallback: derive from effect_type.
+    # 3) Last resort: derive from effect_type.
     effect_to_arch = {
         "DAMAGE": "WARRIOR", "DESTROY": "WARRIOR", "CLASH": "WARRIOR", "DUEL": "WARRIOR",
         "BANISH": "TYRANT", "BLEEDING": "TYRANT", "POISON": "TYRANT", "DOOMED": "TYRANT",
@@ -1039,13 +1162,16 @@ def build_grounded_spec(
     diversity = diversity or {}
     avoid_effects = avoid_effects or set()
     hits = _signal_hits(title, summary)
+    description = _get_description(title)
 
     effect_bucket = diversity.get("effects", {})
     trigger_bucket = diversity.get("triggers", {})
     total = max(int(diversity.get("target", 1)), 1)
 
-    # 1) Pick archetype from Wikipedia signals first (or random if no signals).
-    archetype = _choose_archetype(hits, effect_type="")
+    # 1) Pick archetype: Wikipedia description is the strongest signal, then
+    #    summary keywords, then effect-type fallback. Random only if nothing
+    #    above resolves.
+    archetype = _choose_archetype(hits, effect_type="", description=description)
     if archetype not in ARCHETYPE_EFFECT_WEIGHTS:
         archetype = random.choice(ARCHETYPES)
 
@@ -1293,13 +1419,13 @@ def _generate_flavor(spec: dict, summary: str, retries: int = 4, avoid_effects: 
     if not get_bool("ai.use_ollama"):
         return fallback
     if ollama is None:
-        print(f"[ai] ollama unavailable, fallback used for {spec['title']}", flush=True)
+        print(f"[ai] Ollama Python module not installed — template generator for {spec['title']}", flush=True)
         return fallback
     with _OLLAMA_CHAT_LOCK:
         if not _ensure_ollama_runtime():
             _OLLAMA_RUNTIME_AVAILABLE = False
             if not _OLLAMA_DOWN_NOTIFIED:
-                print("[ai] ollama runtime unavailable, using fallback mode.", flush=True)
+                print("[ai] Ollama offline — using template generator (cards still produced, no LLM flavor).", flush=True)
                 _OLLAMA_DOWN_NOTIFIED = True
             return fallback
 
@@ -1355,7 +1481,9 @@ def _generate_flavor(spec: dict, summary: str, retries: int = 4, avoid_effects: 
             # BEFORE validating so cosmetic-only issues like "two cards" don't
             # waste retries.
             cleaned_text = sanitize_ability_text_value(
-                parsed["ability_text"], int(spec["ability_value"])
+                parsed["ability_text"],
+                int(spec["ability_value"]),
+                effect_type=str(spec.get("effect_type", "")),
             )
             candidate = dict(spec)
             candidate["ability_text"] = cleaned_text
@@ -1387,7 +1515,7 @@ def _generate_flavor(spec: dict, summary: str, retries: int = 4, avoid_effects: 
                     continue
                 _OLLAMA_RUNTIME_AVAILABLE = False
                 if not _OLLAMA_DOWN_NOTIFIED:
-                    print(f"[ai] ollama runtime unavailable: {msg}", flush=True)
+                    print(f"[ai] Ollama connection lost, switching to template generator: {msg}", flush=True)
                     _OLLAMA_DOWN_NOTIFIED = True
                 return fallback
             previous_errors.append(f"Ollama failure: {msg}")
@@ -1426,6 +1554,44 @@ def _sanitize_rationale(raw: str, title: str) -> str:
     if not text.endswith((".", "!", "?")):
         text += "."
     return text
+
+
+_OFFLINE_RATIONALE_BY_ARCHETYPE: dict[str, str] = {
+    "WARRIOR":  "He left his mark on history through battles fought and won.",
+    "TYRANT":   "His name still casts a shadow long after the world he ruled fell.",
+    "HEALER":   "Their work spared lives the world had already given up on.",
+    "SCHOLAR":  "Their ideas outlived the empires that ignored them.",
+    "ARTIST":   "Their art still finds new audiences centuries later.",
+    "DIPLOMAT": "Their decisions shaped borders long after their lifetime.",
+}
+
+
+def _build_offline_spec(
+    title: str,
+    summary: str,
+    rarity: str,
+    diversity: Optional[dict] = None,
+) -> dict:
+    """Build a complete card spec without calling the LLM.
+
+    Used when Ollama is offline. Spec is grounded in the same archetype +
+    keyword pipeline as the online path, but the ability text comes from the
+    template and the rationale from an archetype-keyed fallback line.
+    """
+    spec = build_grounded_spec(title, summary, rarity, diversity=diversity)
+    # Use the canonical mechanical text — never fails validation.
+    spec["ability_text"] = _with_trigger_context(
+        spec["trigger"],
+        _ability_text_template(spec["effect_type"], int(spec.get("ability_value", 0) or 0)),
+    )
+    # Pick a non-character-revealing flavor line by archetype. Personalising
+    # this would require an LLM — that's exactly what we don't have here.
+    archetype = str(spec.get("archetype") or "").upper()
+    spec["rationale"] = _OFFLINE_RATIONALE_BY_ARCHETYPE.get(
+        archetype, "A historical figure who left their mark on the world."
+    )
+    spec["nemesis"] = None
+    return spec
 
 
 def _balance_card(spec: dict) -> dict:
@@ -1493,18 +1659,18 @@ def generate_card_spec(
         with _OLLAMA_CHAT_LOCK:
             runtime_available = _ensure_ollama_runtime()
     if not runtime_available:
-        fallback = get_fallback_cached_card(title, rarity)
-        if fallback is not None and fallback.get("theme") == "LIVING":
-            fallback = dict(fallback)
-            fallback["rarity"] = rarity
-            fallback["title"] = str(fallback.get("title", title) or title)
-            fallback = _balance_card(fallback)
-            print(
-                f"[gen] db fallback: requested {title} [{rarity}] -> "
-                f"{fallback['title']} [{fallback['rarity']}]",
-                flush=True,
-            )
-            return fallback
+        # Offline path: build the spec deterministically for THIS person.
+        # No LLM call, no DB-random-pick — the card keeps the requested name
+        # and gets a templated ability + a generic archetype flavor line.
+        spec = _build_offline_spec(title, summary, rarity, diversity)
+        _balance_card(spec)
+        save_card(spec)
+        print(
+            f"[gen] offline spec: {title} [{rarity}] "
+            f"{spec['trigger']} -> {spec['effect_type']} HP={spec['hp']}",
+            flush=True,
+        )
+        return spec
 
     print(f"[gen] generating: {title} [{rarity}]", flush=True)
     avoid_effects: set[str] = set()
@@ -1519,7 +1685,11 @@ def generate_card_spec(
         # Surface avoid list to the LLM prompt so retries differ visibly.
         flavor = _generate_flavor(spec, summary, avoid_effects=avoid_effects)
         spec["rationale"] = _sanitize_rationale(flavor.get("rationale", ""), spec["title"])
-        spec["ability_text"] = sanitize_ability_text_value(flavor["ability_text"], int(spec["ability_value"]))
+        spec["ability_text"] = sanitize_ability_text_value(
+            flavor["ability_text"],
+            int(spec["ability_value"]),
+            effect_type=str(spec.get("effect_type", "")),
+        )
         spec["nemesis"] = flavor["nemesis"]
 
         valid, errors = _validate_spec(spec)

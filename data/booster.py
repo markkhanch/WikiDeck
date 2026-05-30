@@ -156,6 +156,7 @@ def _generate_pack_cards(pack_type: str, on_progress=None, pack_size: int | None
         raise ValueError(f"Unknown pack type: {pack_type}")
 
     pack_size = int(pack_size or pack_types[pack_type]["size"])
+    print(f"[shop] starting pack generation: {pack_type} ({pack_size} cards)", flush=True)
     cards: list[dict] = []
     used_source_titles: set[str] = set()
     used_card_titles: set[str] = set()

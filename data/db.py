@@ -439,46 +439,6 @@ def get_cached_card(title: str, rarity: str) -> Optional[dict]:
     return _row_to_card_spec(row, title_override=title)
 
 
-def get_fallback_cached_card(title: str, rarity: str) -> Optional[dict]:
-    with _connect() as conn:
-        row = conn.execute(
-            """
-            SELECT title, theme, epoch, rarity, trigger, trigger_value, effect_type,
-                   ability_text, ability_value, nemesis, hp, archetype, rationale
-            FROM cards
-            WHERE title = ?
-            ORDER BY CASE WHEN rarity = ? THEN 0 ELSE 1 END, generated_at DESC
-            LIMIT 1
-            """,
-            (title, rarity),
-        ).fetchone()
-        if row is None:
-            row = conn.execute(
-                """
-                SELECT title, theme, epoch, rarity, trigger, trigger_value, effect_type,
-                       ability_text, ability_value, nemesis, hp, archetype, rationale
-                FROM cards
-                WHERE rarity = ?
-                ORDER BY RANDOM()
-                LIMIT 1
-                """,
-                (rarity,),
-            ).fetchone()
-        if row is None:
-            row = conn.execute(
-                """
-                SELECT title, theme, epoch, rarity, trigger, trigger_value, effect_type,
-                       ability_text, ability_value, nemesis, hp, archetype, rationale
-                FROM cards
-                ORDER BY RANDOM()
-                LIMIT 1
-                """
-            ).fetchone()
-    if row is None:
-        return None
-    return _row_to_card_spec(row)
-
-
 def save_card(card: dict) -> None:
     with _connect() as conn:
         conn.execute(

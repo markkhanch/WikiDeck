@@ -1,7 +1,7 @@
 import pygame
 
 from config import SCREEN_HEIGHT, SCREEN_WIDTH, BG_MID, MUTED_TEXT, NEON_BLUE, NEON_GREEN, WHITE_TEXT
-from core.sound_player import play_click
+from core.sound_player import apply_audio_settings, play_click
 from data.settings_service import (
     categories,
     definitions_by_category,
@@ -43,6 +43,9 @@ def _apply_special_setting(
 ) -> pygame.Surface:
     if key == "display.fullscreen":
         return _set_fullscreen(bool(value))
+    if key.startswith("audio."):
+        # Live-apply volume / toggle changes without restarting the screen.
+        apply_audio_settings()
     return screen
 
 

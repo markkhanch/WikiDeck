@@ -20,6 +20,7 @@ from config import (
 )
 from core.card import Card
 from core.card_factory import build_card_from_spec
+from core.sound_player import start_menu_music, stop_menu_music
 from data.db import init_db
 from data.db import deck_size, get_deck_cards, get_cached_card
 from data.booster import ensure_shop_singles
@@ -91,6 +92,9 @@ def run_app() -> None:
     ensure_shop_singles(min_count=2, background=True)
     background = load_background()
 
+    # Background menu music — plays everywhere except during matches.
+    start_menu_music()
+
     state: str | None = "menu"
     network_session: dict | None = None
     while state is not None:
@@ -106,7 +110,9 @@ def run_app() -> None:
             )
         elif state == "match":
             base_cards = build_cards_from_deck()
+            stop_menu_music()
             state = run_match(screen, fonts, background, base_cards)
+            start_menu_music()
         elif state == "collection":
             state = run_collection(screen, fonts, background)
         elif state == "deck_builder":
@@ -138,6 +144,7 @@ def run_app() -> None:
             if not network_session:
                 state = "menu"
                 continue
+            stop_menu_music()
             state = run_match(
                 screen,
                 fonts,
@@ -146,6 +153,7 @@ def run_app() -> None:
                 network_client=network_session.get("client"),
                 network_role=network_session.get("role"),
             )
+            start_menu_music()
             _cleanup_network_session(network_session)
             network_session = None
         else:

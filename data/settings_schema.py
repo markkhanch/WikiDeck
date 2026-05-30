@@ -19,6 +19,7 @@ from config import (
 SettingType = Literal["bool", "int", "float", "str"]
 
 CATEGORY_GENERAL = "General"
+CATEGORY_AUDIO = "Audio"
 CATEGORY_GAMEPLAY = "Gameplay"
 CATEGORY_SHOP = "Shop"
 CATEGORY_AI = "AI"
@@ -27,6 +28,7 @@ CATEGORY_ADVANCED = "Advanced"
 
 CATEGORY_ORDER = (
     CATEGORY_GENERAL,
+    CATEGORY_AUDIO,
     CATEGORY_GAMEPLAY,
     CATEGORY_SHOP,
     CATEGORY_AI,
@@ -205,6 +207,47 @@ SETTINGS_DEFINITIONS: tuple[SettingDefinition, ...] = tuple(
             apply_scope="live",
         ),
         SettingDefinition(
+            key="audio.master_volume",
+            label="Master volume",
+            category=CATEGORY_AUDIO,
+            value_type="float",
+            default=0.8,
+            min_value=0.0,
+            max_value=1.0,
+            step=0.05,
+            apply_scope="live",
+        ),
+        SettingDefinition(
+            key="audio.music_volume",
+            label="Music volume",
+            category=CATEGORY_AUDIO,
+            value_type="float",
+            default=0.5,
+            min_value=0.0,
+            max_value=1.0,
+            step=0.05,
+            apply_scope="live",
+        ),
+        SettingDefinition(
+            key="audio.sfx_volume",
+            label="Sound effects volume",
+            category=CATEGORY_AUDIO,
+            value_type="float",
+            default=0.8,
+            min_value=0.0,
+            max_value=1.0,
+            step=0.05,
+            apply_scope="live",
+        ),
+        SettingDefinition(
+            key="audio.menu_music_enabled",
+            label="Play menu music",
+            category=CATEGORY_AUDIO,
+            value_type="bool",
+            default=True,
+            apply_scope="live",
+        ),
+        SettingDefinition(
             key="gameplay.starting_hand_size",
             label="Starting hand size",
             category=CATEGORY_GAMEPLAY,
@@ -310,10 +353,10 @@ SETTINGS_DEFINITIONS: tuple[SettingDefinition, ...] = tuple(
             label="AI request timeout (sec)",
             category=CATEGORY_ADVANCED,
             value_type="int",
-            default=10,
+            default=60,
             min_value=1,
-            max_value=120,
-            step=1,
+            max_value=300,
+            step=5,
             advanced=True,
         ),
         SettingDefinition(

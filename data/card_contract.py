@@ -176,10 +176,19 @@ def _replace_word_numbers_with_digits(text: str) -> str:
     return _WORD_NUMBER_RE.sub(repl, text)
 
 
-def sanitize_ability_text_value(text: str, value: int) -> str:
+def sanitize_ability_text_value(text: str, value: int, effect_type: str = "") -> str:
+    """Force the first integer in `text` to match `value`.
+
+    For NUMBERLESS effects (REVIVE, BANISH, HEAL, SHIELD, ...) we don't touch
+    the text — words like "one card" or "two turns" are quantifiers / flavor,
+    not the mechanical value. The legacy two-argument call still works for
+    numbered effects.
+    """
     if not text:
         return text
-    # First, convert English number-words ("two") to digits so the regex can match.
+    if effect_type and effect_type.upper() in NUMBERLESS_EFFECTS:
+        return text
+    # Convert English number-words ("two") to digits so the regex can match.
     text = _replace_word_numbers_with_digits(text)
     # If the LLM omitted a number entirely but the effect needs one, inject it
     # in front of the first "card"/"cards" token so the result still reads well.

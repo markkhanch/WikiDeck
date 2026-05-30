@@ -162,6 +162,12 @@ def _normalize_loaded_values(values: dict[str, Any]) -> dict[str, Any]:
     if summary_min > summary_max:
         normalized["ai.summary_max_chars"] = summary_min
 
+    # One-time migration: the legacy default of 10s for ai.request_timeout was
+    # too short for cold-start remote LLMs. Bump anything <= 15 to the new
+    # default of 60. Users who explicitly wanted a higher value are unaffected.
+    if int(normalized.get("ai.request_timeout", 60)) <= 15:
+        normalized["ai.request_timeout"] = int(SETTINGS_BY_KEY["ai.request_timeout"].default)
+
     try:
         _parse_ports(str(normalized["network.default_ports"]))
     except ValueError:

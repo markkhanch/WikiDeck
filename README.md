@@ -175,12 +175,3 @@ WikiDeck/
 - ⚠️ Network mode has no auth/encryption — LAN only
 - ⚠️ Profile screen is a placeholder (XP/Level coming later)
 
----
-
-## Status
-
-Final showcase build — CS 108, Walla Walla University, June 2026. Active development; everything subject to change.
-
-## Author
-
-Mark Khanchevskii — [github.com/markkhanchevskii](https://github.com/markkhanchevskii)

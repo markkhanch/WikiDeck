@@ -34,7 +34,7 @@ from core.card import Card
 from core.player import Player
 from core.game_state import GameState, Phase
 from ui.particles import draw_animation_system, field_animation_system
-from ui.hud_utils import draw_turn_info, draw_player_panel, draw_score_info, draw_zone_backgrounds
+from ui.hud_utils import draw_zone_backgrounds
 from network.protocol import (
     CONNECTION_STATUS,
     DISCARD_CARD,
@@ -576,20 +576,39 @@ def _draw_hand_ability_hint(
     fonts: dict,
     card: Card,
 ) -> None:
+    from core.glossary import active_status_labels
+
     panel_w = 320
     pad = 10
     title_font = fonts.get("med", fonts["small"])
     body_font = fonts["small"]
-    lines = []
+    ability_lines: list[str] = []
     for src in _ability_preview_lines(card):
-        lines.extend(_wrap_text(src, body_font, panel_w - pad * 2))
-    
-    # Calculate panel height: padding + title + spacing + ability lines + hint spacing + hint
+        ability_lines.extend(_wrap_text(src, body_font, panel_w - pad * 2))
+
+    statuses = active_status_labels(card)
+    status_lines: list[str] = []
+    if statuses:
+        status_lines = _wrap_text(
+            "Statuses: " + ", ".join(statuses),
+            body_font,
+            panel_w - pad * 2,
+        )
+
     title_h = title_font.get_height()
     hint_h = body_font.get_height()
-    content_h = title_h + 4 + (len(lines) * (body_font.get_height() + 2)) + 8 + hint_h + 6
-    panel_h = min(270, pad * 2 + content_h)
-    
+    body_line_h = body_font.get_height() + 2
+    content_h = (
+        title_h
+        + 4
+        + len(ability_lines) * body_line_h
+        + (8 + len(status_lines) * body_line_h if status_lines else 0)
+        + 8
+        + hint_h
+        + 6
+    )
+    panel_h = min(300, pad * 2 + content_h)
+
     px = int(card.rect.right + 12)
     if px + panel_w > SCREEN_WIDTH - 8:
         px = int(card.rect.left - panel_w - 12)
@@ -606,17 +625,25 @@ def _draw_hand_ability_hint(
     title = title_font.render(card.title[:28], True, WHITE_TEXT)
     screen.blit(title, (cx, cy))
     cy += title.get_height() + 4
-    
-    # Reserve space for hint at the bottom
+
     hint_reserve = hint_h + 12
-    
-    for line in lines:
+
+    for line in ability_lines:
         if cy + body_font.get_height() > panel.bottom - hint_reserve:
             break
         surf = body_font.render(line, True, GOLD)
         screen.blit(surf, (cx, cy))
-        cy += body_font.get_height() + 2
-    
+        cy += body_line_h
+
+    if status_lines:
+        cy += 6
+        for line in status_lines:
+            if cy + body_font.get_height() > panel.bottom - hint_reserve:
+                break
+            surf = body_font.render(line, True, NEON_GREEN)
+            screen.blit(surf, (cx, cy))
+            cy += body_line_h
+
     hint = body_font.render("RMB: full details", True, MUTED_TEXT)
     screen.blit(hint, (cx, panel.bottom - hint.get_height() - 6))
 
@@ -723,15 +750,45 @@ def _draw_detail_modal(
             ty += body_font.get_height() + 1
         ty += 8
 
+    # Reserve space for the footer + the glossary section if we have terms.
+    from core.glossary import glossary_for_card
+    glossary = glossary_for_card(card)
+
+    footer_h = body_font.get_height() + 16
+    body_line_h = body_font.get_height() + 1
+
+    # Estimate glossary block height so we know how much to leave for Details.
+    glossary_block_h = 0
+    if glossary:
+        glossary_block_h += body_font.get_height() + 4  # header
+        for term, definition in glossary:
+            wrapped = _wrap_text(f"{term} — {definition}", body_font, tw)
+            glossary_block_h += len(wrapped) * body_line_h
+        glossary_block_h += 10  # spacing above
+
+    bottom_limit = panel.bottom - footer_h - glossary_block_h
+
     if card.extract:
         lore_header = body_font.render("Details", True, GOLD)
         screen.blit(lore_header, (tx, ty))
         ty += lore_header.get_height() + 2
-        max_lines = max(0, (panel.bottom - 18 - ty) // (body_font.get_height() + 1))
+        max_lines = max(0, (bottom_limit - ty) // body_line_h)
         for line in _wrap_text(card.extract, body_font, tw)[:max_lines]:
             surf = body_font.render(line, True, WHITE_TEXT)
             screen.blit(surf, (tx, ty))
-            ty += body_font.get_height() + 1
+            ty += body_line_h
+        ty += 10
+
+    if glossary:
+        glossary_header = body_font.render("Glossary", True, GOLD)
+        screen.blit(glossary_header, (tx, ty))
+        ty += glossary_header.get_height() + 4
+        for term, definition in glossary:
+            for idx, line in enumerate(_wrap_text(f"{term} — {definition}", body_font, tw)):
+                color = NEON_GREEN if idx == 0 else MUTED_TEXT
+                surf = body_font.render(line, True, color)
+                screen.blit(surf, (tx, ty))
+                ty += body_line_h
 
     footer = body_font.render("ESC / click outside to close", True, MUTED_TEXT)
     screen.blit(footer, (panel.right - footer.get_width() - 14, panel.bottom - footer.get_height() - 8))
@@ -739,46 +796,10 @@ def _draw_detail_modal(
 
 
 def _draw_hud(screen: pygame.Surface, game: GameState, fonts: dict) -> None:
-    p1, p2 = game.players
-    active = game.active_player
-
-    # Draw zone backgrounds first (subtle, behind everything)
+    # Player info panels (P1/P2 name + hand/deck/discard/field counts + score)
+    # and the top-right score table are intentionally not drawn — match screen
+    # stays clean. Only the subtle zone background separator remains.
     draw_zone_backgrounds(screen)
-
-    # Draw player panels on sides
-    draw_player_panel(
-        screen,
-        p2.name,
-        len(p2.hand),
-        len(p2.deck),
-        len(p2.discard),
-        len(p2.on_field),
-        game.base_sum(p2),
-        game.score_for(p2),
-        active is p2,
-        is_p1=False,
-        fonts=fonts,
-    )
-
-    draw_player_panel(
-        screen,
-        p1.name,
-        len(p1.hand),
-        len(p1.deck),
-        len(p1.discard),
-        len(p1.on_field),
-        game.base_sum(p1),
-        game.score_for(p1),
-        active is p1,
-        is_p1=True,
-        fonts=fonts,
-    )
-
-    # Draw turn info at top center
-    # draw_turn_info(screen, game.turn_number, active.name, game.phase.value, active is p1, fonts)
-
-    # Draw score info at top right
-    draw_score_info(screen, game.base_sum(p1), game.score_for(p1), game.base_sum(p2), game.score_for(p2), fonts)
 
 
 def _draw_end_turn_button(screen: pygame.Surface, rect: pygame.Rect,
@@ -788,6 +809,42 @@ def _draw_end_turn_button(screen: pygame.Surface, rect: pygame.Rect,
     pygame.draw.rect(screen, color, rect, width=2)
     text = fonts["med"].render("End Turn", True, color)
     screen.blit(text, text.get_rect(center=rect.center))
+
+
+_HP_TOTAL_FONT: pygame.font.Font | None = None
+
+
+def _hp_total_font() -> pygame.font.Font:
+    global _HP_TOTAL_FONT
+    if _HP_TOTAL_FONT is None:
+        _HP_TOTAL_FONT = pygame.font.SysFont("arial", 56, bold=True)
+    return _HP_TOTAL_FONT
+
+
+def _draw_hp_totals(
+    screen: pygame.Surface,
+    game: GameState,
+    end_turn_rect: pygame.Rect,
+) -> None:
+    """Render large HP totals above (P2) and below (P1) the End Turn button."""
+    p1, p2 = game.players
+    p1_total = game.base_sum(p1)
+    p2_total = game.base_sum(p2)
+    font = _hp_total_font()
+
+    def _blit_centered(value: int, center_y: int, color: tuple[int, int, int]) -> None:
+        text = str(value)
+        # Outline / shadow for readability over busy background.
+        shadow = font.render(text, True, (0, 0, 0))
+        main = font.render(text, True, color)
+        rect = main.get_rect(center=(end_turn_rect.centerx, center_y))
+        for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2)):
+            screen.blit(shadow, rect.move(dx, dy))
+        screen.blit(main, rect)
+
+    gap = 56  # distance from button edge to number centre
+    _blit_centered(p2_total, end_turn_rect.top - gap, NEON_RED)
+    _blit_centered(p1_total, end_turn_rect.bottom + gap, NEON_GREEN)
 
 
 def _draw_game_over(screen: pygame.Surface, game: GameState, fonts: dict) -> None:
@@ -1749,6 +1806,7 @@ def run_match(
         _draw_hud(screen, game, fonts)
         end_turn_enabled = game.can_end_turn() and can_interact
         _draw_end_turn_button(screen, end_turn_rect, end_turn_enabled, fonts)
+        _draw_hp_totals(screen, game, end_turn_rect)
         if network_mode:
             _draw_network_status(screen, fonts, my_role, bool(is_my_turn and game.phase != Phase.GAME_OVER), network_status)
         draw_close_button(screen, fonts, hovered=close_rect.collidepoint(mx, my))

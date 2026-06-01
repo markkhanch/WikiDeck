@@ -84,7 +84,13 @@ def run_app() -> None:
     pygame.init()
     init_db()
     ensure_loaded()
-    display_flags = pygame.FULLSCREEN if get_bool("display.fullscreen") else 0
+    # SCALED keeps a logical SCREEN_WIDTH×SCREEN_HEIGHT backbuffer and lets
+    # pygame upscale it to the native display when running fullscreen, so the
+    # background and UI cover the entire monitor instead of leaving black bars.
+    if get_bool("display.fullscreen"):
+        display_flags = pygame.FULLSCREEN | pygame.SCALED
+    else:
+        display_flags = 0
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), display_flags)
     pygame.display.set_caption(WINDOW_TITLE)
     fonts = make_fonts()

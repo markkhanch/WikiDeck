@@ -17,7 +17,10 @@ from ui.screens.common import close_button_rect, draw_back_hint, draw_background
 
 
 def _set_fullscreen(enabled: bool) -> pygame.Surface:
-    flags = pygame.FULLSCREEN if enabled else 0
+    # pygame.SCALED lets pygame upscale our logical SCREEN_WIDTH×SCREEN_HEIGHT
+    # to whatever the native display resolution is, so the background covers
+    # the full monitor instead of sitting in a 1280×800 box with black bars.
+    flags = (pygame.FULLSCREEN | pygame.SCALED) if enabled else 0
     return pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), flags)
 
 

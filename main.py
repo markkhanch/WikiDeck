@@ -18,6 +18,7 @@ from config import (
     WINDOW_TITLE,
     BG_IMAGE_PATH,
 )
+from core.ai_health import kick_check as kick_ai_check
 from core.card import Card
 from core.card_factory import build_card_from_spec
 from core.sound_player import start_menu_music, stop_menu_music
@@ -97,6 +98,11 @@ def run_app() -> None:
 
     ensure_shop_singles(min_count=2, background=True)
     background = load_background()
+
+    # Kick off a background Ollama ping so the main menu can render a status
+    # badge as soon as the worker finishes. Non-blocking — the menu shows up
+    # immediately and the badge swaps from "Checking…" to "online/offline".
+    kick_ai_check()
 
     # Background menu music — plays everywhere except during matches.
     start_menu_music()

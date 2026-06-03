@@ -335,10 +335,12 @@ def run_shop(
 
                 latest = per_type_latest.get(pack_type)
                 status_y = buy_rect.bottom + 8
+                step_line = ""
                 if latest is None:
                     line = "No active packs"
                 elif latest["status"] == "generating":
                     line = f"Generating... {latest['generated_count']}/{latest['pack_size']} cards"
+                    step_line = str(latest.get("current_step") or "")
                 elif latest["status"] == "error":
                     line = "Generation failed. Buy again."
                 elif latest["can_open"]:
@@ -353,6 +355,10 @@ def run_shop(
                     status_color = MUTED_TEXT
                 status_surf = fonts["small"].render(line, True, status_color)
                 screen.blit(status_surf, (rect.x + 10, status_y))
+                if step_line:
+                    # Sub-step text in muted color so the eye still goes to the count above.
+                    step_surf = fonts["small"].render(step_line[:60], True, MUTED_TEXT)
+                    screen.blit(step_surf, (rect.x + 10, status_y + status_surf.get_height() + 2))
 
         elif active_tab == "singles":
             left = pygame.Rect(content_rect.x + 20, content_rect.y + 36, 300, content_rect.height - 66)
@@ -435,6 +441,10 @@ def run_shop(
                         color = GOLD
                     state = fonts["small"].render(state_text, True, color)
                     screen.blit(state, (row_rect.x + 10, row_rect.y + 34))
+                    step_msg = str(pack.get("current_step") or "")
+                    if step_msg and pack["status"] == "generating":
+                        step_surf = fonts["small"].render(step_msg[:80], True, MUTED_TEXT)
+                        screen.blit(step_surf, (row_rect.x + 200, row_rect.y + 34))
 
                     if pack["can_open"]:
                         btn = pygame.Rect(row_rect.right - 130, row_rect.y + 14, 116, 34)

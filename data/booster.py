@@ -53,6 +53,49 @@ _GENERATION_LOCK = threading.Lock()
 _SINGLE_GEN_LOCK = threading.Lock()
 _SINGLE_GEN_INFLIGHT = 0
 
+# Per-pack in-memory progress text, keyed by pack_id. Updated by the
+# background generator; surfaced via get_pending_packs(); cleared once the
+# pack reaches "ready".
+_PACK_STEP: dict[int, str] = {}
+_PACK_STEP_LOCK = threading.Lock()
+_SINGLE_GEN_STEP: str = ""
+
+
+def _set_pack_step(pack_id: int, step: str) -> None:
+    changed = False
+    with _PACK_STEP_LOCK:
+        if _PACK_STEP.get(pack_id) != step:
+            changed = True
+        _PACK_STEP[pack_id] = step
+    if changed and step:
+        print(f"[shop] pack #{pack_id}: {step}", flush=True)
+
+
+def _clear_pack_step(pack_id: int) -> None:
+    with _PACK_STEP_LOCK:
+        _PACK_STEP.pop(pack_id, None)
+
+
+def _get_pack_step(pack_id: int) -> str:
+    with _PACK_STEP_LOCK:
+        return _PACK_STEP.get(pack_id, "")
+
+
+def _set_single_step(step: str) -> None:
+    global _SINGLE_GEN_STEP
+    changed = False
+    with _PACK_STEP_LOCK:
+        if _SINGLE_GEN_STEP != step:
+            changed = True
+        _SINGLE_GEN_STEP = step
+    if changed and step:
+        print(f"[shop] single: {step}", flush=True)
+
+
+def get_single_step() -> str:
+    with _PACK_STEP_LOCK:
+        return _SINGLE_GEN_STEP
+
 
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
@@ -150,7 +193,12 @@ def _save_pending_cards(pack_id: int, cards: list[dict], status: str = "generati
         conn.commit()
 
 
-def _generate_pack_cards(pack_type: str, on_progress=None, pack_size: int | None = None) -> list[dict]:
+def _generate_pack_cards(
+    pack_type: str,
+    on_progress=None,
+    pack_size: int | None = None,
+    step_fn=None,
+) -> list[dict]:
     pack_types = get_pack_types()
     if pack_type not in pack_types:
         raise ValueError(f"Unknown pack type: {pack_type}")
@@ -164,22 +212,43 @@ def _generate_pack_cards(pack_type: str, on_progress=None, pack_size: int | None
     max_attempts = pack_size * 20
     diversity = {"effects": {}, "triggers": {}, "target": pack_size}
 
+    def _say(msg: str) -> None:
+        if step_fn is not None:
+            try:
+                step_fn(msg)
+            except Exception:
+                pass
+
     while len(cards) < pack_size:
         attempts += 1
         if attempts > max_attempts:
             raise RuntimeError(f"Could not generate enough cards for {pack_type} pack")
 
+        slot = len(cards) + 1
         rarity = pick_rarity_weighted(pack_type)
-        title, summary, _ignored_rarity = get_article_from_pool(diversity=diversity, pack_rarity=rarity)
+        _say(f"Card {slot}/{pack_size}: searching Wikipedia for a {rarity.lower()} person…")
+
+        def _pool_step(msg: str, _slot=slot, _size=pack_size) -> None:
+            _say(f"Card {_slot}/{_size}: {msg}")
+
+        title, summary, _ignored_rarity = get_article_from_pool(
+            diversity=diversity, pack_rarity=rarity, step_fn=_pool_step
+        )
         if title in used_source_titles:
             continue
         used_source_titles.add(title)
 
-        spec = generate_card_spec(title, summary, rarity, diversity=diversity)
+        # Forward fine-grained generator steps into the same pack step channel.
+        def _gen_step(msg: str, _slot=slot, _size=pack_size) -> None:
+            _say(f"Card {_slot}/{_size}: {msg}")
+
+        _say(f"Card {slot}/{pack_size}: generating {title} ({rarity})…")
+        spec = generate_card_spec(title, summary, rarity, diversity=diversity, step_fn=_gen_step)
         final_title = str(spec.get("title", title) or title)
         if final_title in used_card_titles:
             continue
 
+        _say(f"Card {slot}/{pack_size}: downloading portrait of {final_title}…")
         try:
             prefetch_card_assets(final_title)
         except Exception as exc:
@@ -189,9 +258,12 @@ def _generate_pack_cards(pack_type: str, on_progress=None, pack_size: int | None
         used_card_titles.add(final_title)
         apply_diversity(diversity, spec)
 
+        _say(f"Card {slot}/{pack_size} done: {final_title}")
+
         if on_progress is not None:
             on_progress(cards)
 
+    _say("Finalizing pack…")
     return cards
 
 
@@ -203,13 +275,19 @@ def _generate_in_background(pack_id: int, pack_type: str) -> None:
         cards = list(current_cards)
         _save_pending_cards(pack_id, cards, status="generating")
 
+    def _step(msg: str) -> None:
+        _set_pack_step(pack_id, msg)
+
+    _step("Waiting for generation slot…")
     try:
         with _GENERATION_LOCK:
-            cards = _generate_pack_cards(pack_type, on_progress=_progress)
+            cards = _generate_pack_cards(pack_type, on_progress=_progress, step_fn=_step)
         _save_pending_cards(pack_id, cards, status="ready")
     except Exception as exc:
         print(f"[shop] pack #{pack_id} generation failed: {exc}", flush=True)
         _save_pending_cards(pack_id, cards, status="ready" if cards else "error")
+    finally:
+        _clear_pack_step(pack_id)
 
 
 def purchase_pack(pack_type: str) -> int:
@@ -272,6 +350,7 @@ def get_pending_packs() -> list[dict]:
                 "pack_size": pack_size,
                 "seconds_left": 0,
                 "can_open": is_ready_for_open,
+                "current_step": _get_pack_step(int(row["id"])),
             }
         )
     return result
@@ -322,13 +401,17 @@ def _pick_single_rarity() -> str:
 
 def _generate_single_spec() -> dict:
     rarity = _pick_single_rarity()
-    title, summary, _ignored_rarity = get_article_from_pool()
-    spec = generate_card_spec(title, summary, rarity)
+    _set_single_step(f"Searching Wikipedia for a {rarity.lower()} person…")
+    title, summary, _ignored_rarity = get_article_from_pool(step_fn=_set_single_step)
+    _set_single_step(f"Generating {title} ({rarity})…")
+    spec = generate_card_spec(title, summary, rarity, step_fn=_set_single_step)
     final_title = str(spec.get("title", title) or title)
+    _set_single_step(f"Downloading portrait of {final_title}…")
     try:
         prefetch_card_assets(final_title)
     except Exception as exc:
         print(f"[shop] image prefetch failed for {final_title}: {exc}", flush=True)
+    _set_single_step("")
     return spec
 
 

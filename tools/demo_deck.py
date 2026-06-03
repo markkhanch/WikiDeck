@@ -1,24 +1,35 @@
-"""Install a curated demo deck — 20 cards covering every trigger and effect.
+"""Install a curated demo deck — 25 cards covering every trigger and effect.
 
 Run before a showcase so the active deck deterministically demonstrates
 every mechanic. Idempotent: rerunning resets the active deck to exactly
-these 20 cards.
+these 25 cards.
 
 Usage:
     python3 -m tools.demo_deck
 
 What it does:
- 1. Inserts (or replaces) 20 hand-authored card specs in the `cards` table.
+ 1. Inserts (or replaces) 25 hand-authored card specs in the `cards` table.
  2. Adds each card to the collection (only if not already owned).
- 3. Resets the active deck to these 20 cards, count = 1 each.
- 4. Prefetches the Wikipedia summary + image for each title so the cards
-    render with full art and extract text at first play.
+ 3. Resets the active deck to these 25 cards, count = 1 each.
+ 4. Prefetches Wikipedia summary + image for every title.
+
+Design constraints (no nonsense pairings):
+ - DEATHWISH never grants self-defence (SHIELD/IMMUNITY/VEIL on a dead card
+   is pointless). Instead: DEATHWISH carries DAMAGE / REVIVE / DRAW /
+   VITALITY-to-ally (legacy lives on).
+ - DEATHBLOW grants what the card "earns" from a kill: DAMAGE, DRAW.
+ - ORDER carries strong active effects (DAMAGE 3, REVIVE).
+ - TIMER fires an event (DESTROY), never a passive status.
+ - ADRENALINE / BLOODTHIRST grant offensive or stabilizing effects only.
 
 Trigger / effect coverage:
-    DEPLOY, ORDER, DEATHWISH, DEATHBLOW, ADRENALINE, BLOODTHIRST, TIMER.
-    DAMAGE, DRAW, VITALITY, BLEEDING, POISON, HEAL, SHIELD, IMMUNITY,
-    LOCK, BANISH, DESTROY, CLASH, DISCARD, REVIVE.
-    (DUEL, DOOMED, VEIL omitted for deck size — easy to add later.)
+    DEPLOY, ORDER, DEATHWISH, DEATHBLOW, TIMER, ADRENALINE, BLOODTHIRST.
+    DAMAGE, DESTROY, BANISH, HEAL, VITALITY, BLEEDING, POISON, SHIELD,
+    IMMUNITY, VEIL, LOCK, DRAW, DISCARD, CLASH, REVIVE.
+    (DUEL, DOOMED omitted for deck size — show on demand from BD.)
+
+Profile: aggressive — 8 direct-damage cards, 2 destroy/banish, 3 healing,
+3 vitality stacks, 3 control, plus 6 utility/draw.
 """
 from __future__ import annotations
 
@@ -41,7 +52,7 @@ from data.db import (  # noqa: E402
 
 
 DEMO_DECK: list[dict] = [
-    # ───────── LEGENDARY (4) ─────────
+    # ───────── LEGENDARY (5) — heavy hitters and signature cards ─────────
     {
         "title": "Albert Einstein",
         "theme": "LIVING", "epoch": "MODERN", "rarity": "LEGENDARY",
@@ -70,7 +81,17 @@ DEMO_DECK: list[dict] = [
         "ability_text": "Deathblow: Draw 2 cards.",
         "nemesis": "Pompey", "hp": 7, "base_score": 0,
         "archetype": "WARRIOR",
-        "rationale": "Every victory rewrote what Rome thought possible.",
+        "rationale": "Every conquered field taught him the next campaign.",
+    },
+    {
+        "title": "Alexander the Great",
+        "theme": "LIVING", "epoch": "ANCIENT", "rarity": "LEGENDARY",
+        "trigger": "DEATHBLOW", "trigger_value": 0,
+        "effect_type": "DAMAGE", "ability_value": 2,
+        "ability_text": "Deathblow: Deal 2 damage to one enemy card.",
+        "nemesis": "Darius III", "hp": 7, "base_score": 0,
+        "archetype": "WARRIOR",
+        "rationale": "Each conquest only sharpened his appetite for the next.",
     },
     {
         "title": "Cleopatra",
@@ -83,7 +104,7 @@ DEMO_DECK: list[dict] = [
         "rationale": "She turned every audience chamber into her own theatre.",
     },
 
-    # ───────── EPIC (4) ─────────
+    # ───────── EPIC (6) — strong active effects ─────────
     {
         "title": "Isaac Newton",
         "theme": "LIVING", "epoch": "EARLY_MODERN", "rarity": "EPIC",
@@ -105,6 +126,26 @@ DEMO_DECK: list[dict] = [
         "rationale": "He inherited a tent and left behind a continent of ash.",
     },
     {
+        "title": "Spartacus",
+        "theme": "LIVING", "epoch": "ANCIENT", "rarity": "EPIC",
+        "trigger": "DEATHWISH", "trigger_value": 0,
+        "effect_type": "DAMAGE", "ability_value": 2,
+        "ability_text": "Deathwish: Deal 2 damage to one enemy card.",
+        "nemesis": "Marcus Licinius Crassus", "hp": 6, "base_score": 0,
+        "archetype": "WARRIOR",
+        "rationale": "Even nailed to a cross, the rebellion still marched in his name.",
+    },
+    {
+        "title": "Sun Tzu",
+        "theme": "LIVING", "epoch": "ANCIENT", "rarity": "EPIC",
+        "trigger": "DEPLOY", "trigger_value": 0,
+        "effect_type": "LOCK", "ability_value": 0,
+        "ability_text": "Lock an enemy card.",
+        "nemesis": None, "hp": 5, "base_score": 0,
+        "archetype": "SCHOLAR",
+        "rationale": "He won wars before the first arrow ever left the bow.",
+    },
+    {
         "title": "Mahatma Gandhi",
         "theme": "LIVING", "epoch": "MODERN", "rarity": "EPIC",
         "trigger": "DEPLOY", "trigger_value": 0,
@@ -122,10 +163,10 @@ DEMO_DECK: list[dict] = [
         "ability_text": "Banish one enemy card.",
         "nemesis": "Mark Antony", "hp": 6, "base_score": 0,
         "archetype": "DIPLOMAT",
-        "rationale": "He erased rivals from history more thoroughly than the sword could.",
+        "rationale": "He erased rivals from history more thoroughly than any sword.",
     },
 
-    # ───────── RARE (4) ─────────
+    # ───────── RARE (5) — variety and creative triggers ─────────
     {
         "title": "Hannibal",
         "theme": "LIVING", "epoch": "ANCIENT", "rarity": "RARE",
@@ -134,17 +175,27 @@ DEMO_DECK: list[dict] = [
         "ability_text": "Clash with one enemy card.",
         "nemesis": "Scipio Africanus", "hp": 5, "base_score": 0,
         "archetype": "WARRIOR",
-        "rationale": "He marched elephants across mountains to meet Rome on its threshold.",
+        "rationale": "He marched elephants across the Alps to meet Rome on its threshold.",
     },
     {
         "title": "Marie Curie",
         "theme": "LIVING", "epoch": "MODERN", "rarity": "RARE",
         "trigger": "DEPLOY", "trigger_value": 0,
-        "effect_type": "VITALITY", "ability_value": 3,
-        "ability_text": "Give this card Vitality for 3 turns.",
+        "effect_type": "POISON", "ability_value": 0,
+        "ability_text": "Give an enemy card Poison.",
         "nemesis": None, "hp": 5, "base_score": 0,
-        "archetype": "HEALER",
+        "archetype": "SCHOLAR",
         "rationale": "She held the glow that killed her, and called it discovery.",
+    },
+    {
+        "title": "Joan of Arc",
+        "theme": "LIVING", "epoch": "MEDIEVAL", "rarity": "RARE",
+        "trigger": "DEATHWISH", "trigger_value": 0,
+        "effect_type": "VITALITY", "ability_value": 3,
+        "ability_text": "Deathwish: Give an allied card Vitality for 3 turns.",
+        "nemesis": "John of Lancaster", "hp": 5, "base_score": 0,
+        "archetype": "HEALER",
+        "rationale": "Her ashes spoke louder than the verdict that made them.",
     },
     {
         "title": "Wolfgang Amadeus Mozart",
@@ -167,7 +218,7 @@ DEMO_DECK: list[dict] = [
         "rationale": "She painted her own bones together when no doctor could.",
     },
 
-    # ───────── UNCOMMON (4) ─────────
+    # ───────── UNCOMMON (5) — backbone effects ─────────
     {
         "title": "Florence Nightingale",
         "theme": "LIVING", "epoch": "MODERN", "rarity": "UNCOMMON",
@@ -208,8 +259,18 @@ DEMO_DECK: list[dict] = [
         "archetype": "TYRANT",
         "rationale": "Virtue was his blade, and the Terror its edge.",
     },
+    {
+        "title": "Leonardo da Vinci",
+        "theme": "LIVING", "epoch": "EARLY_MODERN", "rarity": "UNCOMMON",
+        "trigger": "ORDER", "trigger_value": 0,
+        "effect_type": "REVIVE", "ability_value": 0,
+        "ability_text": "Order: Return one card from your discard pile to the field.",
+        "nemesis": None, "hp": 5, "base_score": 0,
+        "archetype": "ARTIST",
+        "rationale": "Every sketch was a prophecy waiting for its tools.",
+    },
 
-    # ───────── COMMON (4) ─────────
+    # ───────── COMMON (4) — cheap, splashable utility ─────────
     {
         "title": "Lucrezia Borgia",
         "theme": "LIVING", "epoch": "MEDIEVAL", "rarity": "COMMON",
@@ -244,8 +305,8 @@ DEMO_DECK: list[dict] = [
         "title": "Niccolò Machiavelli",
         "theme": "LIVING", "epoch": "EARLY_MODERN", "rarity": "COMMON",
         "trigger": "DEPLOY", "trigger_value": 0,
-        "effect_type": "LOCK", "ability_value": 0,
-        "ability_text": "Lock an enemy card.",
+        "effect_type": "VEIL", "ability_value": 0,
+        "ability_text": "Give this card Veil.",
         "nemesis": None, "hp": 4, "base_score": 0,
         "archetype": "SCHOLAR",
         "rationale": "He told princes the truth they already knew but never spoke.",
@@ -284,8 +345,6 @@ def install_demo_deck() -> None:
             f"{spec['trigger']:>11} → {spec['effect_type']:10}  {spec['hp']}"
         )
 
-        # Image / extract prefetch — best-effort, network failures don't fail
-        # the install. The image will simply fetch on first card hover instead.
         try:
             prefetch_card_assets(spec["title"])
         except Exception as exc:

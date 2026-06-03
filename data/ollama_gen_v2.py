@@ -642,24 +642,66 @@ def _extract_person_article_fields(article: dict | None) -> tuple[str, str] | No
 def get_article_from_pool(
     diversity: Optional[dict] = None,
     pack_rarity: Optional[str] = None,
+    step_fn=None,
 ) -> Tuple[str, str, str]:
     if not ARTICLE_POOL:
         raise RuntimeError("Historical personalities pool is empty.")
 
+    def _say(msg: str) -> None:
+        if step_fn is not None:
+            try:
+                step_fn(msg)
+            except Exception:
+                pass
+
     max_attempts = min(120, len(ARTICLE_POOL) * 2)
+    tried = 0
+    in_db_skipped = 0
+    wiki_misses = 0
+    wiki_errors = 0
+    non_person = 0
+    consecutive_wiki_misses = 0
     for _ in range(max_attempts):
+        tried += 1
         title = random.choice(ARTICLE_POOL)
         if _title_exists_in_cards(title):
+            in_db_skipped += 1
             continue
+        # Show progress every few tries so a slow Wikipedia is visible.
+        if tried % 3 == 0 or tried <= 3:
+            _say(
+                f"Pool walk: tried {tried}, in-DB {in_db_skipped}, "
+                f"wiki miss {wiki_misses}, wiki err {wiki_errors}, non-person {non_person}"
+            )
         summary = _fetch_summary_from_api(title)
-        if summary and _looks_like_person(title, summary):
-            views = get_monthly_views(title)
-            rarity = assign_rarity_by_views(views)
-            if pack_rarity is not None:
-                _log(f"  -> {title} | views: {views:,}/month | pack rarity: {pack_rarity}")
-            else:
-                _log(f"  -> Rarity: {rarity} ({views:,} views/month)")
-            return title, summary, rarity
+        if summary is None:
+            wiki_misses += 1
+            consecutive_wiki_misses += 1
+            # Short-circuit: if Wikipedia has failed 5 times in a row, assume
+            # the network is down and stop wasting 30s per attempt.
+            if consecutive_wiki_misses >= 5:
+                _say(
+                    f"Wikipedia unreachable ({consecutive_wiki_misses} misses in a row) — "
+                    f"check network/DNS. Aborting pool walk."
+                )
+                raise RuntimeError(
+                    f"Wikipedia unreachable after {tried} attempts "
+                    f"({consecutive_wiki_misses} consecutive misses). "
+                    f"Check DNS / network."
+                )
+            continue
+        consecutive_wiki_misses = 0
+        if not _looks_like_person(title, summary):
+            non_person += 1
+            continue
+        views = get_monthly_views(title)
+        rarity = assign_rarity_by_views(views)
+        if pack_rarity is not None:
+            _log(f"  -> {title} | views: {views:,}/month | pack rarity: {pack_rarity}")
+        else:
+            _log(f"  -> Rarity: {rarity} ({views:,} views/month)")
+        _say(f"Picked {title} after {tried} tries")
+        return title, summary, rarity
 
     pool_copy = list(ARTICLE_POOL)
     random.shuffle(pool_copy)
@@ -1647,21 +1689,29 @@ def generate_card_spec(
     summary: str,
     rarity: str,
     diversity: Optional[dict] = None,
+    step_fn=None,
 ) -> dict:
+    def _say(msg: str) -> None:
+        if step_fn is not None:
+            try:
+                step_fn(msg)
+            except Exception:
+                pass
+
     init_db()
     cached = get_cached_card(title, rarity)
     if cached is not None and cached.get("theme") == "LIVING":
         print(f"[gen] cache hit: {title} [{rarity}]", flush=True)
+        _say(f"Cache hit: {title}")
         return cached
 
+    _say(f"Checking AI connectivity for {title}…")
     runtime_available = False
     if ollama is not None:
         with _OLLAMA_CHAT_LOCK:
             runtime_available = _ensure_ollama_runtime()
     if not runtime_available:
-        # Offline path: build the spec deterministically for THIS person.
-        # No LLM call, no DB-random-pick — the card keeps the requested name
-        # and gets a templated ability + a generic archetype flavor line.
+        _say(f"AI offline — using template for {title}")
         spec = _build_offline_spec(title, summary, rarity, diversity)
         _balance_card(spec)
         save_card(spec)
@@ -1675,6 +1725,7 @@ def generate_card_spec(
     print(f"[gen] generating: {title} [{rarity}]", flush=True)
     avoid_effects: set[str] = set()
     for attempt in range(1, 7):
+        _say(f"{title}: planning mechanic (try {attempt}/6)…")
         spec = build_grounded_spec(
             title,
             summary,
@@ -1682,8 +1733,9 @@ def generate_card_spec(
             diversity,
             avoid_effects=avoid_effects,
         )
-        # Surface avoid list to the LLM prompt so retries differ visibly.
+        _say(f"{title}: asking AI for flavor — {spec['effect_type']} / {spec['trigger']}…")
         flavor = _generate_flavor(spec, summary, avoid_effects=avoid_effects)
+        _say(f"{title}: validating AI response…")
         spec["rationale"] = _sanitize_rationale(flavor.get("rationale", ""), spec["title"])
         spec["ability_text"] = sanitize_ability_text_value(
             flavor["ability_text"],
@@ -1696,9 +1748,8 @@ def generate_card_spec(
         if not valid:
             if attempt < 6:
                 print(f"[gen] retry {attempt}/6 invalid: {title} -> {errors[0]}", flush=True)
+                _say(f"{title}: invalid → retry {attempt + 1}/6")
                 continue
-            # Last attempt: rebuild ability_text from template so the engine
-            # gets correct mechanical text. We keep rationale (flavor) intact.
             spec["ability_text"] = _with_trigger_context(
                 spec["trigger"],
                 _ability_text_template(spec["effect_type"], int(spec["ability_value"])),
@@ -1714,6 +1765,7 @@ def generate_card_spec(
                 if avoid_effect:
                     avoid_effects.add(avoid_effect)
                 print(f"[gen] retry {attempt}/6 diversity: {title}", flush=True)
+                _say(f"{title}: diversity rejected → retry {attempt + 1}/6 (avoid {avoid_effect})")
                 continue
 
         _balance_card(spec)
@@ -1723,6 +1775,7 @@ def generate_card_spec(
             f"HP={spec['hp']}",
             flush=True,
         )
+        _say(f"{title}: spec saved")
         return spec
 
     raise RuntimeError(f"Unable to generate valid card for '{title}'.")
